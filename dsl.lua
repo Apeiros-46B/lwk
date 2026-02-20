@@ -1,7 +1,5 @@
 local Registry = require('registry')
-
----@diagnostic disable-next-line: deprecated
-local unpack = table.unpack or unpack
+local util = require('util')
 
 local Element = { lang = 'html' }
 local Rule = { lang = 'css' }
@@ -71,7 +69,9 @@ local function push_node(parent, node, builder, ctx, lang)
 		end
 
 		if mt == Element then
-			node:build(builder, ctx, node.next_lang or lang)
+			node:build(builder, ctx, lang)
+		elseif mt == Rule then
+			node:build(builder, ctx, parent)
 		elseif mt == Component then
 			node:build(builder, ctx, parent, lang)
 		elseif mt == Modifier then
@@ -126,7 +126,7 @@ function Element.new(tag)
 	end
 end
 
-function Element:build(builder, ctx)
+function Element:build(builder, ctx, lang)
 	builder:push('<' .. self.tag)
 	for k, v in pairs(self.props) do
 		builder:push(' ' .. k .. '="' .. tostring(v) .. '"')
@@ -141,14 +141,13 @@ function Element:build(builder, ctx)
 		builder:indent()
 		builder:newline()
 		for _, child in ipairs(self.children) do
-			push_node(self, child, builder, ctx)
+			push_node(self, child, builder, ctx, self.next_lang or lang)
 		end
 		builder:unindent()
 		builder:newline()
 	end
 
 	builder:push('</' .. self.tag .. '>')
-	builder:newline()
 end
 -- }}}
 
@@ -172,26 +171,22 @@ function Rule.new(selector)
 		end
 
 		for _, v in ipairs(args) do
-			if getmetatable(v) == Rule then
-				self.children[#self.children+1] = v
-			else
-				raise_error(v, "Rule's children can only be Rules")
-			end
+			self.children[#self.children+1] = v
 		end
 
 		return self
 	end
 end
 
-function Rule:build(builder, ctx, parent_selector)
+function Rule:build(builder, ctx, parent)
 	local selector = self.selector
-	if parent_selector then
+	if parent and parent.selector then
 		if self.selector:find('&') then
 			-- child selector directly references parent
-			selector = self.selector:gsub('&', '(' .. parent_selector .. ')')
+			selector = self.selector:gsub('&', '(' .. parent.selector .. ')')
 		else
 			-- standard descendant selector
-			selector = parent_selector .. ' ' .. self.selector
+			selector = parent.selector .. ' ' .. self.selector
 		end
 	end
 
@@ -208,9 +203,14 @@ function Rule:build(builder, ctx, parent_selector)
 		builder:newline()
 	end
 
+	local original_selector = self.selector
+	self.selector = selector
+
 	for _, child in ipairs(self.children) do
-		child:build(builder, ctx, selector)
+		push_node(self, child, builder, ctx, 'css')
 	end
+
+	self.selector = original_selector
 end
 -- }}}
 
@@ -258,15 +258,20 @@ function Modifier.new(name, apply_fn, lang)
 
 		self.name = name
 		self.lang = lang -- nil is fine
-		self.args = args or {}
 		self.apply_fn = apply_fn
+
+		if type(args) ~= 'table' then
+			self.args = { args }
+		else
+			self.args = args
+		end
 
 		return self
 	end
 end
 
 function Modifier:apply(element, ctx)
-	self.apply_fn(self, element, ctx, unpack(self.args))
+	self.apply_fn(self, element, ctx, util.unpack(self.args))
 end
 -- }}}
 
@@ -274,7 +279,9 @@ DSL.Element = Element
 DSL.Component = Component
 DSL.Modifier = Modifier
 
--- {{{ builtin components
+DSL.rule = Rule.new
+
+-- {{{ builtin components and modifiers
 DSL.If = Component.new_macro('If', function(args, ctx)
 	local cond = args.cond
 	if cond == nil then
@@ -313,6 +320,12 @@ DSL.ForEach = Component.new_macro('ForEach', function(args, ctx)
 		fragment[#fragment+1] = render(k, v, ctx)
 	end
 	return fragment
+end)
+
+DSL.Set = Modifier.new('Set', function(_, element, _, k, v)
+	if element.props then
+		element.props[k] = v
+	end
 end)
 -- }}}
 
