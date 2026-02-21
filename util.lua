@@ -50,11 +50,12 @@ end
 
 -- return a shallow copy of a table
 function util.shallow_copy(tbl)
+	local mt = getmetatable(tbl)
 	local res = {}
 	for k, v in pairs(tbl) do
 		res[k] = v
 	end
-	return res
+	return setmetatable(res, mt)
 end
 
 -- iterate over only pairs with string keys

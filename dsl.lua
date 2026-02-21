@@ -15,6 +15,11 @@ local attr_seps = {
 	-- otherwise, default to space
 }
 
+local is_mergeable_attr = {
+	class = true,
+	style = true,
+}
+
 local is_void_element = {
 	area = true,
 	base = true,
@@ -108,8 +113,61 @@ local function resolve_node(parent, node, ctx, lang)
 	return {}
 end
 
+local function merge_attr(existing, new_value, mergeable)
+	if not mergeable then
+		return new_value
+	end
+
+	local merged = {}
+	if existing ~= nil then
+		if type(existing) == 'table' then
+			for _, v in ipairs(existing) do
+				merged[#merged+1] = v
+			end
+		else
+			merged[#merged+1] = existing
+		end
+	end
+
+	if new_value ~= nil then
+		if type(new_value) == 'table' then
+			for _, v in ipairs(new_value) do
+				merged[#merged+1] = v
+			end
+		else
+			merged[#merged+1] = new_value
+		end
+	end
+
+	return merged
+end
+
 -- {{{ HTML elements
 Element.__index = Element
+
+-- currying for passing extra arguments
+function Element:__call(extra_args)
+	local clone = util.shallow_copy(self)
+	capture_trace(clone, 3)
+
+	clone.props = util.shallow_copy(self.props)
+	clone.children = util.shallow_copy(self.children)
+
+	local args = extra_args
+	if type(args) ~= 'table' then
+		args = { args }
+	end
+
+	for k, v in util.spairs(args) do
+		clone.props[k] = merge_attr(clone.props[k], v, is_mergeable_attr[k] or false)
+	end
+
+	for _, child in ipairs(args) do
+		clone.children[#clone.children+1] = child
+	end
+
+	return clone
+end
 
 function Element.new(tag)
 	return function(args)
@@ -204,11 +262,8 @@ function Rule.new(selector)
 		self.props = {}
 		self.children = {}
 
-		for raw_k, v in pairs(args) do
-			if type(raw_k) == 'string' then
-				local k, _ = raw_k:gsub('_', '-')
-				self.props[k] = v
-			end
+		for k, v in util.spairs(args) do
+			self.props[k:gsub('_', '-')] = v
 		end
 
 		for _, v in ipairs(args) do
@@ -325,6 +380,33 @@ end
 
 -- {{{ user-defined components
 Component.__index = Component
+
+-- currying for passing extra arguments
+function Component:__call(extra_args)
+	local clone = util.shallow_copy(self)
+	capture_trace(clone, 3)
+
+	if type(self.args) ~= 'table' then
+		clone.args = { self.args }
+	else
+		clone.args = util.shallow_copy(self.args)
+	end
+
+	local args = extra_args
+	if type(args) ~= 'table' then
+		args = { args }
+	end
+
+	for k, v in util.spairs(args) do
+		clone.args[k] = merge_attr(clone.args[k], v, is_mergeable_attr[k] or false)
+	end
+
+	for _, child in ipairs(args) do
+		clone.args[#clone.args+1] = child
+	end
+
+	return clone
+end
 
 function Component.new(name, render_fn, lang)
 	return function(args)

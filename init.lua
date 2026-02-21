@@ -5,6 +5,9 @@ _ENV = Dsl
 
 local user_bio = '<script>alert("hi");</script>'
 
+local my_div = div { class = 'red', id = 'my_div', ['@click'] = 'alert("Hi")' }
+local your_div = my_div { class = 'bold', p 'Inherited' }
+
 local doc = html {
 	head {
 		style {
@@ -14,7 +17,11 @@ local doc = html {
 		},
 	},
 	body {
-		p { class = 'bio', user_bio },
+		your_div {
+			class = 'italic',
+			id = 'the_div',
+			p { class = 'bio', user_bio },
+		},
 		Raw '<svg><circle r="5"/></svg>',
 	},
 }
