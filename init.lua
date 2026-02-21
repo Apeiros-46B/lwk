@@ -37,7 +37,7 @@ local doc = html {
 	},
 	body {
 		div {
-			HtmlClass("container"),
+			class = "container",
 
 			h1 { "Welcome" },
 
@@ -60,8 +60,7 @@ local doc = html {
 
 local b = Builder.new(true) -- pretty = true
 local ctx = { is_dark_mode = true }
-
-doc:build(b, ctx)
+dsl.render(doc, b, ctx)
 print(b:build())
 
 end)

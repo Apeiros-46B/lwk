@@ -52,37 +52,33 @@ end
 
 -- parent is the current node that we're pushing into (target of modifiers).
 -- "If", "For", and similar constructs pass their parent instead of themselves
-local function push_node(parent, node, builder, ctx, lang)
+local function resolve_node(parent, node, ctx, lang)
 	local ty = type(node)
+	if not node then return {} end
 
 	if ty == 'string' or ty == 'number' then
-		-- leaf
-		builder:push(node)
+		return { tostring(node) }
 	elseif ty == 'function' then
-		-- lazy
-		push_node(parent, node(ctx), builder, ctx, lang)
+		return resolve_node(parent, node(ctx), ctx, lang)
 	elseif ty == 'table' then
-		local mt = getmetatable(node)
-
-		if node.lang and lang and node.lang ~= lang then
+		if lang and node.lang and lang ~= node.lang then
 			raise_error(node, ("%s node used in %s context"):format(node.lang, lang))
 		end
 
-		if mt == Element then
-			node:build(builder, ctx, lang)
-		elseif mt == Rule then
-			node:build(builder, ctx, parent)
-		elseif mt == Component then
-			node:build(builder, ctx, parent, lang)
-		elseif mt == Modifier then
-			node:apply(parent, ctx)
+		if type(node.resolve) == 'function' then
+			return node:resolve(parent, ctx, lang)
 		else
 			-- implicit fragment
+			local resolved = {}
 			for _, child in ipairs(node) do
-				push_node(parent, child, builder, ctx, lang)
+				for _, res in ipairs(resolve_node(parent, child, ctx, lang)) do
+					resolved[#resolved+1] = res
+				end
 			end
+			return resolved
 		end
 	end
+	return {}
 end
 
 -- {{{ HTML elements
@@ -113,7 +109,7 @@ function Element.new(tag)
 
 		for raw_k, v in pairs(args) do
 			if type(raw_k) == 'string' then
-				local k, _ = raw_k:gsub("_", "-")
+				local k, _ = raw_k:gsub('_', '-')
 				self.props[k] = v
 			end
 		end
@@ -124,6 +120,17 @@ function Element.new(tag)
 
 		return self
 	end
+end
+
+function Element:resolve(_, ctx, lang)
+	local resolved = {}
+	for _, child in ipairs(self.children) do
+		for _, res in ipairs(resolve_node(self, child, ctx, self.next_lang or lang)) do
+			resolved[#resolved+1] = res
+		end
+	end
+	self.children = resolved
+	return { self }
 end
 
 function Element:build(builder, ctx, lang)
@@ -140,8 +147,16 @@ function Element:build(builder, ctx, lang)
 	if #self.children > 0 then
 		builder:indent()
 		builder:newline()
-		for _, child in ipairs(self.children) do
-			push_node(self, child, builder, ctx, self.next_lang or lang)
+		for i, child in ipairs(self.children) do
+			if type(child) == 'table' then
+				-- table children are guaranteed to be Elements or Rules
+				child:build(builder, ctx, self.next_lang or lang)
+			else
+				builder:push(child)
+			end
+			if i < #self.children then
+				builder:newline()
+			end
 		end
 		builder:unindent()
 		builder:newline()
@@ -165,7 +180,7 @@ function Rule.new(selector)
 
 		for raw_k, v in pairs(args) do
 			if type(raw_k) == 'string' then
-				local k, _ = raw_k:gsub("_", "-")
+				local k, _ = raw_k:gsub('_', '-')
 				self.props[k] = v
 			end
 		end
@@ -178,36 +193,85 @@ function Rule.new(selector)
 	end
 end
 
+function Rule:resolve(_, ctx, _)
+	local resolved = {}
+	for _, child in ipairs(self.children) do
+		for _, res in ipairs(resolve_node(self, child, ctx, 'css')) do
+			resolved[#resolved+1] = res
+		end
+	end
+	self.children = resolved
+	return { self }
+end
+
 function Rule:build(builder, ctx, parent)
 	local selector = self.selector
 	if parent and parent.selector then
 		if self.selector:find('&') then
 			-- child selector directly references parent
-			selector = self.selector:gsub('&', '(' .. parent.selector .. ')')
+			selector = self.selector:gsub('&', parent.selector)
 		else
 			-- standard descendant selector
 			selector = parent.selector .. ' ' .. self.selector
 		end
 	end
 
-	if next(self.props) ~= nil then
+	local has_props = next(self.props) ~= nil
+
+	if has_props then
+		builder:push(selector .. '{')
 		builder:indent()
 		builder:newline()
-		builder:push(selector .. '{')
-		for k, v in pairs(self.props) do
-			local prop = k:gsub('_', '-')
-			builder:push(prop .. ':' .. tostring(v) .. ';')
+
+		-- deterministic key ordering
+		local keys = {}
+		for k in pairs(self.props) do
+			keys[#keys+1] = k
 		end
-		builder:push('}')
+		table.sort(keys)
+
+		for i, k in ipairs(keys) do
+			local prop = k:gsub('_', '-')
+			local val = self.props[k]
+
+			if type(val) == 'table' then
+				-- array-based fallbacks (color = { 'black', 'var(--theme)' })
+				for j, sub_val in ipairs(val) do
+					builder:push(prop .. ':' .. tostring(sub_val) .. ';')
+
+					-- don't add a newline if it's the last value of the last property
+					if not (i == #keys and j == #val) then
+						builder:newline()
+					end
+				end
+			else
+				builder:push(prop .. ':' .. tostring(val) .. ';')
+				if i < #keys then
+					builder:newline()
+				end
+			end
+		end
+
 		builder:unindent()
+		builder:newline()
+		builder:push('}')
+	end
+
+	if has_props and #self.children > 0 then
 		builder:newline()
 	end
 
 	local original_selector = self.selector
 	self.selector = selector
 
-	for _, child in ipairs(self.children) do
-		push_node(self, child, builder, ctx, 'css')
+	for i, child in ipairs(self.children) do
+		if type(child) == 'table' then
+			-- only rules will be left in the AST
+			child:build(builder, ctx, self)
+		end
+		if i < #self.children then
+			builder:newline()
+		end
 	end
 
 	self.selector = original_selector
@@ -241,10 +305,15 @@ function Component.new_macro(name, render_fn)
 	end
 end
 
-function Component:build(builder, ctx, parent, lang)
+function Component:resolve(parent, ctx, lang)
 	local inner = self.render_fn(self.args, ctx)
+
+	-- if the component is a macro, modifiers apply to the parent
 	local target = self.is_macro and parent or self
-	push_node(target, inner, builder, ctx, self.lang or lang)
+	local current_lang = self.lang or lang
+
+	-- components are inlined
+	return resolve_node(target, inner, ctx, current_lang)
 end
 -- }}}
 
@@ -270,8 +339,15 @@ function Modifier.new(name, apply_fn, lang)
 	end
 end
 
-function Modifier:apply(element, ctx)
-	self.apply_fn(self, element, ctx, util.unpack(self.args))
+function Modifier:resolve(parent, ctx, _)
+	if parent then
+		self.apply_fn(self, parent, ctx, util.unpack(self.args))
+	else
+		raise_error(self, 'Modifier used without a valid parent node')
+	end
+
+	-- modifiers are erased from the AST
+	return {}
 end
 -- }}}
 
@@ -280,6 +356,18 @@ DSL.Component = Component
 DSL.Modifier = Modifier
 
 DSL.rule = Rule.new
+
+function DSL.render(root, builder, ctx, lang)
+	lang = lang or 'html'
+	local resolved = resolve_node(nil, root, ctx, lang)
+	for _, node in ipairs(resolved) do
+		if type(node) == 'table' then
+			node:build(builder, ctx, lang)
+		else
+			builder:push(node)
+		end
+	end
+end
 
 -- {{{ builtin components and modifiers
 DSL.If = Component.new_macro('If', function(args, ctx)
