@@ -6,7 +6,7 @@ util.wrap_env(dsl, function()
 
 local doc = html {
 	head {
-		title "Test Page",
+		title 'Test Page',
 
 		style {
 			rule 'body' {
@@ -37,18 +37,27 @@ local doc = html {
 	},
 	body {
 		div {
-			class = "container",
+			class = 'container',
 
-			h1 { "Welcome" },
+			h1 { 'Welcome' },
 
-			If {
-				cond = true,
-				if_true = p { Set { 'class', 'text-green' }, "Condition passed!" }
+			p {
+				class = 'text-normal',
+
+				If {
+					cond = true,
+					if_true = {
+						Set { 'id', 'successful-para' },
+						Append { 'class', 'text-green' },
+						'Condition passed!',
+					},
+					if_false = 'Condition failed!',
+				},
 			},
 
 			ul {
 				ForEach {
-					items = { "Apple", "Banana", "Cherry" },
+					items = { 'Apple', 'Banana', 'Cherry' },
 					render = function(i, item)
 						return li { id = i, item }
 					end
@@ -58,7 +67,7 @@ local doc = html {
 	}
 }
 
-local b = Builder.new(true) -- pretty = true
+local b = Builder.new(false) -- pretty = true
 local ctx = { is_dark_mode = true }
 dsl.render(doc, b, ctx)
 print(b:build())

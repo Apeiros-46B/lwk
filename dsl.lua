@@ -9,6 +9,12 @@ local Modifier = {}
 
 local DSL = {}
 
+DSL.attr_separators = {
+	['srcset'] = ', ',
+	['accept'] = ', ',
+	-- otherwise, default to space
+}
+
 local is_void_element = {
 	area = true,
 	base = true,
@@ -62,7 +68,7 @@ local function resolve_node(parent, node, ctx, lang)
 		return resolve_node(parent, node(ctx), ctx, lang)
 	elseif ty == 'table' then
 		if lang and node.lang and lang ~= node.lang then
-			raise_error(node, ("%s node used in %s context"):format(node.lang, lang))
+			raise_error(node, ('%s node used in %s context'):format(node.lang, lang))
 		end
 
 		if type(node.resolve) == 'function' then
@@ -136,7 +142,14 @@ end
 function Element:build(builder, ctx, lang)
 	builder:push('<' .. self.tag)
 	for k, v in pairs(self.props) do
-		builder:push(' ' .. k .. '="' .. tostring(v) .. '"')
+		local str
+		if type(v) == 'table' then
+			local sep = DSL.attr_separators[k] or ' '
+			str = table.concat(v, sep)
+		else
+			str = tostring(v)
+		end
+		builder:push(' ' .. k .. '="' .. str .. '"')
 	end
 	builder:push('>')
 
@@ -409,10 +422,41 @@ DSL.ForEach = Component.new_macro('ForEach', function(args, ctx)
 	end
 	return fragment
 end)
+-- }}}
 
+-- {{{
 DSL.Set = Modifier.new('Set', function(_, element, _, k, v)
 	if element.props then
 		element.props[k] = v
+	end
+end)
+
+DSL.Append = Modifier.new('Append', function(_, node, _, key, values)
+	if not node.props then return end
+
+	if type(values) ~= 'table' then
+		values = { values }
+	end
+
+	local current = node.props[key]
+
+	if current == nil then
+		-- make fresh array
+		node.props[key] = {}
+		for _, v in ipairs(values) do
+			node.props[key][#node.props[key]+1] = v
+		end
+	elseif type(current) == 'table' then
+		-- append to existing array
+		for _, v in ipairs(values) do
+			current[#current+1] = v
+		end
+	else
+		-- upgrade existing string to an array
+		node.props[key] = { current }
+		for _, v in ipairs(values) do
+			node.props[key][#node.props[key]+1] = v
+		end
 	end
 end)
 -- }}}
