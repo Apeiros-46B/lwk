@@ -21,6 +21,11 @@ local doc = html {
 			class = 'italic',
 			id = 'the_div',
 			p { class = 'bio', user_bio },
+			If {
+				cond = true,
+				if_true = Append { 'class', 'true' },
+				if_false = Set { 'id', 'false' },
+			},
 		},
 		Raw '<svg><circle r="5"/></svg>',
 	},

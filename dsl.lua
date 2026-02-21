@@ -1,24 +1,18 @@
 local util = require('util')
 
-local Element = { lang = 'html' }
-local Rule = { lang = 'css' }
-local Raw = {}
-
-local Component = {}
-local Modifier = {}
-
 local Dsl = {}
 
+-- {{{ html handling helpers
 local attr_seps = {
-	['srcset'] = ', ',
-	['accept'] = ', ',
-	-- otherwise, default to space
+	srcset = ', ',
+	accept = ', ',
+	class = ' ',
+	style = ';',
 }
 
-local is_mergeable_attr = {
-	class = true,
-	style = true,
-}
+function Dsl.register_attr_sep(attr, sep)
+	attr_seps[attr] = sep
+end
 
 local is_void_element = {
 	area = true,
@@ -48,7 +42,9 @@ local function escape_html(str)
 	local res, _ = str:gsub("[&<>\"']", html_escapes)
 	return res
 end
+-- }}}
 
+-- {{{ debug logging helpers
 local function capture_trace(obj, level)
 	-- level 3 = user code calling the closure
 	level = level or 3
@@ -75,7 +71,9 @@ local function raise_error(node, msg)
 	)
 	error(err, 0)
 end
+-- }}}
 
+-- {{{ tree building helpers
 -- parent is the current node that we're pushing into (target of modifiers).
 -- "If", "For", and similar constructs pass their parent instead of themselves
 local function resolve_node(parent, node, ctx, lang)
@@ -142,8 +140,157 @@ local function merge_attr(existing, new_value, mergeable)
 	return merged
 end
 
+function Dsl.render(root, builder, ctx, lang)
+	lang = lang or 'html'
+	local resolved = resolve_node(nil, root, ctx, lang)
+	for _, node in ipairs(resolved) do
+		if type(node) == 'table' then
+			node:build(builder, ctx, lang)
+		else
+			builder:push(node)
+		end
+	end
+end
+-- }}}
+
+-- {{{ raw strings
+local Raw = {}
+Raw.__index = Raw
+
+function Raw.new(text)
+	local self = setmetatable({}, Raw)
+	self.text = tostring(text)
+	return self
+end
+Dsl.Raw = Raw.new
+
+function Raw:resolve(_, _, _)
+	return { self }
+end
+
+function Raw:build(builder, _, _)
+	-- directly push unescaped string
+	builder:push(self.text)
+end
+-- }}}
+
+-- {{{ CSS rules
+local Rule = {}
+Rule.__index = Rule
+Rule.lang = 'css'
+
+function Rule.new(selector)
+	return function(args)
+		local self = setmetatable({}, Rule)
+		capture_trace(self, 3)
+
+		self.selector = selector
+		self.props = {}
+		self.children = {}
+
+		for k, v in util.spairs(args) do
+			self.props[k:gsub('_', '-')] = v
+		end
+
+		for _, v in ipairs(args) do
+			self.children[#self.children+1] = v
+		end
+
+		return self
+	end
+end
+Dsl.Rule = Rule.new
+
+function Rule:resolve(_, ctx, _)
+	local resolved = {}
+	for _, child in ipairs(self.children) do
+		for _, res in ipairs(resolve_node(self, child, ctx, 'css')) do
+			resolved[#resolved+1] = res
+		end
+	end
+	self.children = resolved
+	return { self }
+end
+
+function Rule:build(builder, ctx, parent)
+	local selector = self.selector
+	if parent and parent.selector then
+		if self.selector:find('&') then
+			-- child selector directly references parent
+			selector = self.selector:gsub('&', parent.selector)
+		else
+			-- standard descendant selector
+			selector = parent.selector .. ' ' .. self.selector
+		end
+	end
+
+	local has_props = next(self.props) ~= nil
+
+	if has_props then
+		builder:push(selector .. '{')
+		builder:indent()
+		builder:newline()
+
+		-- deterministic key ordering
+		local keys = {}
+		for k in pairs(self.props) do
+			keys[#keys+1] = k
+		end
+		table.sort(keys)
+
+		for i, k in ipairs(keys) do
+			local prop, _ = k:gsub('_', '-')
+			local v = self.props[k]
+
+			if type(v) == 'table' then
+				-- array-based fallbacks (color = { 'black', 'var(--theme)' })
+				for j, sub_val in ipairs(v) do
+					builder:push(prop .. ':' .. tostring(sub_val) .. ';')
+
+					-- don't add a newline if it's the last value of the last property
+					if not (i == #keys and j == #v) then
+						builder:newline()
+					end
+				end
+			else
+				builder:push(prop .. ':' .. tostring(v) .. ';')
+				if i < #keys then
+					builder:newline()
+				end
+			end
+		end
+
+		builder:unindent()
+		builder:newline()
+		builder:push('}')
+	end
+
+	if has_props and #self.children > 0 then
+		builder:newline()
+	end
+
+	local original_selector = self.selector
+	self.selector = selector
+
+	for i, child in ipairs(self.children) do
+		if type(child) == 'table' then
+			-- only rules will be left in the AST
+			child:build(builder, ctx, self)
+		end
+		if i < #self.children then
+			builder:newline()
+		end
+	end
+
+	self.selector = original_selector
+end
+-- }}}
+
 -- {{{ HTML elements
+local Element = {}
 Element.__index = Element
+Element.lang = 'html'
+Dsl.Element = Element
 
 -- currying for passing extra arguments
 function Element:__call(extra_args)
@@ -159,7 +306,7 @@ function Element:__call(extra_args)
 	end
 
 	for k, v in util.spairs(args) do
-		clone.props[k] = merge_attr(clone.props[k], v, is_mergeable_attr[k] or false)
+		clone.props[k] = merge_attr(clone.props[k], v, attr_seps[k] ~= nil)
 	end
 
 	for _, child in ipairs(args) do
@@ -214,7 +361,18 @@ end
 
 function Element:build(builder, ctx, lang)
 	builder:push('<' .. self.tag)
-	for k, v in pairs(self.props) do
+
+	-- deterministic key ordering
+	local keys = {}
+	for k in pairs(self.props) do
+		keys[#keys+1] = k
+	end
+	table.sort(keys)
+
+	for _, k in ipairs(keys) do
+		local prop, _ = k:gsub('_', '-')
+		local v = self.props[k]
+
 		local str
 		if type(v) == 'table' then
 			local sep = attr_seps[k] or ' '
@@ -222,7 +380,7 @@ function Element:build(builder, ctx, lang)
 		else
 			str = tostring(v)
 		end
-		builder:push(' ' .. k .. '="' .. escape_html(str) .. '"')
+		builder:push(' ' .. prop .. '="' .. escape_html(str) .. '"')
 	end
 	builder:push('>')
 
@@ -250,136 +408,10 @@ function Element:build(builder, ctx, lang)
 end
 -- }}}
 
--- {{{ CSS rules
-Rule.__index = Rule
-
-function Rule.new(selector)
-	return function(args)
-		local self = setmetatable({}, Rule)
-		capture_trace(self, 3)
-
-		self.selector = selector
-		self.props = {}
-		self.children = {}
-
-		for k, v in util.spairs(args) do
-			self.props[k:gsub('_', '-')] = v
-		end
-
-		for _, v in ipairs(args) do
-			self.children[#self.children+1] = v
-		end
-
-		return self
-	end
-end
-
-function Rule:resolve(_, ctx, _)
-	local resolved = {}
-	for _, child in ipairs(self.children) do
-		for _, res in ipairs(resolve_node(self, child, ctx, 'css')) do
-			resolved[#resolved+1] = res
-		end
-	end
-	self.children = resolved
-	return { self }
-end
-
-function Rule:build(builder, ctx, parent)
-	local selector = self.selector
-	if parent and parent.selector then
-		if self.selector:find('&') then
-			-- child selector directly references parent
-			selector = self.selector:gsub('&', parent.selector)
-		else
-			-- standard descendant selector
-			selector = parent.selector .. ' ' .. self.selector
-		end
-	end
-
-	local has_props = next(self.props) ~= nil
-
-	if has_props then
-		builder:push(selector .. '{')
-		builder:indent()
-		builder:newline()
-
-		-- deterministic key ordering
-		local keys = {}
-		for k in pairs(self.props) do
-			keys[#keys+1] = k
-		end
-		table.sort(keys)
-
-		for i, k in ipairs(keys) do
-			local prop = k:gsub('_', '-')
-			local val = self.props[k]
-
-			if type(val) == 'table' then
-				-- array-based fallbacks (color = { 'black', 'var(--theme)' })
-				for j, sub_val in ipairs(val) do
-					builder:push(prop .. ':' .. tostring(sub_val) .. ';')
-
-					-- don't add a newline if it's the last value of the last property
-					if not (i == #keys and j == #val) then
-						builder:newline()
-					end
-				end
-			else
-				builder:push(prop .. ':' .. tostring(val) .. ';')
-				if i < #keys then
-					builder:newline()
-				end
-			end
-		end
-
-		builder:unindent()
-		builder:newline()
-		builder:push('}')
-	end
-
-	if has_props and #self.children > 0 then
-		builder:newline()
-	end
-
-	local original_selector = self.selector
-	self.selector = selector
-
-	for i, child in ipairs(self.children) do
-		if type(child) == 'table' then
-			-- only rules will be left in the AST
-			child:build(builder, ctx, self)
-		end
-		if i < #self.children then
-			builder:newline()
-		end
-	end
-
-	self.selector = original_selector
-end
--- }}}
-
--- {{{ support raw unescaped strings
-Raw.__index = Raw
-
-function Raw.new(text)
-	local self = setmetatable({}, Raw)
-	self.text = tostring(text)
-	return self
-end
-
-function Raw:resolve(_, _, _)
-	return { self }
-end
-
-function Raw:build(builder, _, _)
-	-- directly push unescaped string
-	builder:push(self.text)
-end
--- }}}
-
--- {{{ user-defined components
+-- {{{ components
+local Component = {}
 Component.__index = Component
+Dsl.Component = Component
 
 -- currying for passing extra arguments
 function Component:__call(extra_args)
@@ -398,7 +430,7 @@ function Component:__call(extra_args)
 	end
 
 	for k, v in util.spairs(args) do
-		clone.args[k] = merge_attr(clone.args[k], v, is_mergeable_attr[k] or false)
+		clone.args[k] = merge_attr(clone.args[k], v, attr_seps[k] ~= nil)
 	end
 
 	for _, child in ipairs(args) do
@@ -422,30 +454,31 @@ function Component.new(name, render_fn, lang)
 	end
 end
 
-function Component.new_macro(name, render_fn)
-	return function(args)
-		local self = Component.new(name, render_fn)(args)
-
-		self.is_macro = true
-
-		return self
-	end
+function Component:resolve(parent, ctx, lang)
+	-- components are inlined, and modifiers apply to their parentsd
+	return resolve_node(parent, self.render_fn(self.args, ctx), ctx, self.lang or lang)
 end
 
-function Component:resolve(parent, ctx, lang)
-	local inner = self.render_fn(self.args, ctx)
+function Dsl.register_component(filepath)
+	local name = filepath:match('([^/]+)%.lua$')
 
-	-- if the component is a macro, modifiers apply to the parent
-	local target = self.is_macro and parent or self
-	local current_lang = self.lang or lang
+	if not name then
+		error(('invalid component name "%s"'):format(filepath), 2)
+	end
 
-	-- components are inlined
-	return resolve_node(target, inner, ctx, current_lang)
+	local comp = util.eval_with_env(filepath, Dsl)
+	Dsl[name] = comp
+
+	util.log('registered component ' .. filepath, 'info', 'dsl')
+
+	return comp
 end
 -- }}}
 
--- {{{ user-defined modifiers
+-- {{{ modifiers
+local Modifier = {}
 Modifier.__index = Modifier
+Dsl.Modifier = Modifier
 
 function Modifier.new(name, apply_fn, lang)
 	return function(args)
@@ -478,46 +511,8 @@ function Modifier:resolve(parent, ctx, _)
 end
 -- }}}
 
-Dsl.Element = Element
-Dsl.Component = Component
-Dsl.Modifier = Modifier
-
-Dsl.Rule = Rule.new
-Dsl.Raw = Raw.new
-
-function Dsl.render(root, builder, ctx, lang)
-	lang = lang or 'html'
-	local resolved = resolve_node(nil, root, ctx, lang)
-	for _, node in ipairs(resolved) do
-		if type(node) == 'table' then
-			node:build(builder, ctx, lang)
-		else
-			builder:push(node)
-		end
-	end
-end
-
-function Dsl.register_attr_sep(attr, sep)
-	attr_seps[attr] = sep
-end
-
-function Dsl.register_component(filepath)
-	local name = filepath:match('([^/]+)%.lua$')
-
-	if not name then
-		error(('invalid component name "%s"'):format(filepath), 2)
-	end
-
-	local comp = util.eval_with_env(filepath, Dsl)
-	Dsl[name] = comp
-
-	util.log('registered component ' .. filepath, 'info', 'dsl')
-
-	return comp
-end
-
 -- {{{ builtin components
-Dsl.If = Component.new_macro('If', function(args, ctx)
+Dsl.If = Component.new('If', function(args, ctx)
 	local cond = args.cond
 	if cond == nil then
 		cond = args[1]
@@ -537,7 +532,7 @@ Dsl.If = Component.new_macro('If', function(args, ctx)
 	end
 end)
 
-Dsl.ForEach = Component.new_macro('ForEach', function(args, ctx)
+Dsl.ForEach = Component.new('ForEach', function(args, ctx)
 	local items = args.items or args[1]
 	local render = args.render or args[2]
 
