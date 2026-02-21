@@ -1,15 +1,15 @@
-local Registry = require('registry')
 local util = require('util')
 
 local Element = { lang = 'html' }
 local Rule = { lang = 'css' }
+local Raw = {}
 
 local Component = {}
 local Modifier = {}
 
-local DSL = {}
+local Dsl = {}
 
-DSL.attr_separators = {
+local attr_seps = {
 	['srcset'] = ', ',
 	['accept'] = ', ',
 	-- otherwise, default to space
@@ -31,6 +31,19 @@ local is_void_element = {
 	wbr = true,
 }
 
+local html_escapes = {
+	['&'] = '&amp;',
+	['<'] = '&lt;',
+	['>'] = '&gt;',
+	['"'] = '&quot;',
+	["'"] = '&#39;'
+}
+
+local function escape_html(str)
+	local res, _ = str:gsub("[&<>\"']", html_escapes)
+	return res
+end
+
 local function capture_trace(obj, level)
 	-- level 3 = user code calling the closure
 	level = level or 3
@@ -45,10 +58,12 @@ local function capture_trace(obj, level)
 end
 
 local function raise_error(node, msg)
-	local err = string.format(
-		'\n[ERROR] %s\n' ..
-		'  Location : %s\n' ..
-		'  Context  : %s\n',
+	local fmt = [[
+[DSL] %s
+  Location: %s
+  Context:  %s
+	]]
+	local err = fmt:format(
 		msg,
 		node.debug_src or 'unknown location',
 		node.debug_trace or ''
@@ -63,7 +78,13 @@ local function resolve_node(parent, node, ctx, lang)
 	if not node then return {} end
 
 	if ty == 'string' or ty == 'number' then
-		return { tostring(node) }
+		local str = tostring(node)
+		if lang == 'html' then
+			return { escape_html(str) }
+		else
+			-- don't escape raw strings in CSS
+			return { str }
+		end
 	elseif ty == 'function' then
 		return resolve_node(parent, node(ctx), ctx, lang)
 	elseif ty == 'table' then
@@ -91,9 +112,6 @@ end
 Element.__index = Element
 
 function Element.new(tag)
-	-- TODO: check if the tag name is valid
-	-- maybe need to do this inside the returned function so traceback is correct
-
 	return function(args)
 		local self = setmetatable({}, Element)
 		capture_trace(self, 3)
@@ -113,11 +131,8 @@ function Element.new(tag)
 			args = { args }
 		end
 
-		for raw_k, v in pairs(args) do
-			if type(raw_k) == 'string' then
-				local k, _ = raw_k:gsub('_', '-')
-				self.props[k] = v
-			end
+		for k, v in util.spairs(args) do
+			self.props[k:gsub('_', '-')] = v
 		end
 
 		for _, v in ipairs(args) do
@@ -144,18 +159,16 @@ function Element:build(builder, ctx, lang)
 	for k, v in pairs(self.props) do
 		local str
 		if type(v) == 'table' then
-			local sep = DSL.attr_separators[k] or ' '
+			local sep = attr_seps[k] or ' '
 			str = table.concat(v, sep)
 		else
 			str = tostring(v)
 		end
-		builder:push(' ' .. k .. '="' .. str .. '"')
+		builder:push(' ' .. k .. '="' .. escape_html(str) .. '"')
 	end
 	builder:push('>')
 
-	if self.is_void then
-		return
-	end
+	if self.is_void then return end
 
 	if #self.children > 0 then
 		builder:indent()
@@ -291,6 +304,25 @@ function Rule:build(builder, ctx, parent)
 end
 -- }}}
 
+-- {{{ support raw unescaped strings
+Raw.__index = Raw
+
+function Raw.new(text)
+	local self = setmetatable({}, Raw)
+	self.text = tostring(text)
+	return self
+end
+
+function Raw:resolve(_, _, _)
+	return { self }
+end
+
+function Raw:build(builder, _, _)
+	-- directly push unescaped string
+	builder:push(self.text)
+end
+-- }}}
+
 -- {{{ user-defined components
 Component.__index = Component
 
@@ -356,7 +388,7 @@ function Modifier:resolve(parent, ctx, _)
 	if parent then
 		self.apply_fn(self, parent, ctx, util.unpack(self.args))
 	else
-		raise_error(self, 'Modifier used without a valid parent node')
+		raise_error(self, 'modifier used without a valid parent node')
 	end
 
 	-- modifiers are erased from the AST
@@ -364,13 +396,14 @@ function Modifier:resolve(parent, ctx, _)
 end
 -- }}}
 
-DSL.Element = Element
-DSL.Component = Component
-DSL.Modifier = Modifier
+Dsl.Element = Element
+Dsl.Component = Component
+Dsl.Modifier = Modifier
 
-DSL.rule = Rule.new
+Dsl.Rule = Rule.new
+Dsl.Raw = Raw.new
 
-function DSL.render(root, builder, ctx, lang)
+function Dsl.render(root, builder, ctx, lang)
 	lang = lang or 'html'
 	local resolved = resolve_node(nil, root, ctx, lang)
 	for _, node in ipairs(resolved) do
@@ -382,8 +415,27 @@ function DSL.render(root, builder, ctx, lang)
 	end
 end
 
--- {{{ builtin components and modifiers
-DSL.If = Component.new_macro('If', function(args, ctx)
+function Dsl.register_attr_sep(attr, sep)
+	attr_seps[attr] = sep
+end
+
+function Dsl.register_component(filepath)
+	local name = filepath:match('([^/]+)%.lua$')
+
+	if not name then
+		error(('invalid component name "%s"'):format(filepath), 2)
+	end
+
+	local comp = util.eval_with_env(filepath, Dsl)
+	Dsl[name] = comp
+
+	util.log('registered component ' .. filepath, 'info', 'dsl')
+
+	return comp
+end
+
+-- {{{ builtin components
+Dsl.If = Component.new_macro('If', function(args, ctx)
 	local cond = args.cond
 	if cond == nil then
 		cond = args[1]
@@ -403,7 +455,7 @@ DSL.If = Component.new_macro('If', function(args, ctx)
 	end
 end)
 
-DSL.ForEach = Component.new_macro('ForEach', function(args, ctx)
+Dsl.ForEach = Component.new_macro('ForEach', function(args, ctx)
 	local items = args.items or args[1]
 	local render = args.render or args[2]
 
@@ -424,14 +476,14 @@ DSL.ForEach = Component.new_macro('ForEach', function(args, ctx)
 end)
 -- }}}
 
--- {{{
-DSL.Set = Modifier.new('Set', function(_, element, _, k, v)
+-- {{{ builtin modifiers
+Dsl.Set = Modifier.new('Set', function(_, element, _, k, v)
 	if element.props then
 		element.props[k] = v
 	end
 end)
 
-DSL.Append = Modifier.new('Append', function(_, node, _, key, values)
+Dsl.Append = Modifier.new('Append', function(_, node, _, key, values)
 	if not node.props then return end
 
 	if type(values) ~= 'table' then
@@ -461,18 +513,39 @@ DSL.Append = Modifier.new('Append', function(_, node, _, key, values)
 end)
 -- }}}
 
--- env setup to auto-resolve from registry and lazily create HTML elements
-setmetatable(DSL, {
+-- env setup to pass through globals, lazily create HTML elements,
+-- and handle write-only component registration
+setmetatable(Dsl, {
 	__index = function(env, k)
 		if _G[k] then return _G[k] end
 
-		local comp = Registry.get(k)
-		if comp then return comp end
+		if type(k) ~= 'string' then return nil end
 
+		if k:find('^%u') then
+			-- components always begin with uppercase
+			error(('unknown component "%s"'):format(k), 2)
+		end
+
+		-- lazily generate HTML elements
 		local element = Element.new(k)
 		rawset(env, k, element)
 		return element
+	end,
+	__newindex = function(env, k, v)
+		if type(k) ~= 'string' then
+			error(('cannot use non-string key "%s"'):format(tostring(k)), 2)
+		end
+
+		if rawget(env, k) ~= nil then
+			error(('component "%s" already exists'):format(k), 2)
+		end
+
+		if k:find('^%l') then
+			error(('component name "%s" cannot start with lowercase'):format(k), 2)
+		end
+
+		rawset(env, k, v)
 	end
 })
 
-return DSL
+return Dsl
