@@ -16,18 +16,23 @@ local doc = html {
 			},
 		},
 	},
-	body {
-		your_div {
-			class = 'italic',
-			id = 'the_div',
-			p { class = 'bio', user_bio },
-			If {
-				cond = true,
-				if_true = Append { 'class', 'true' },
-				if_false = Set { 'id', 'false' },
+	Provide { dark = true } {
+		body {
+			your_div {
+				class = 'italic',
+				id = 'the_div',
+				p { class = 'bio', user_bio },
+				If {
+					cond = true,
+					if_true = Classes {
+						dark = function(ctx) return ctx.dark end,
+						light = function(ctx) return not ctx.dark end,
+					},
+					if_false = Set { 'id', 'false' },
+				},
 			},
+			Raw '<svg><circle r="5"/></svg>',
 		},
-		Raw '<svg><circle r="5"/></svg>',
 	},
 }
 

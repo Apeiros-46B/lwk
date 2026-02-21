@@ -58,7 +58,7 @@ local function capture_trace(obj, level)
 	return obj
 end
 
-local function raise_error(node, msg)
+function Dsl.raise_error(node, msg)
 	local fmt = [[
 [DSL] %s
   Location: %s
@@ -92,7 +92,7 @@ local function resolve_node(parent, node, ctx, lang)
 		return resolve_node(parent, node(ctx), ctx, lang)
 	elseif ty == 'table' then
 		if lang and node.lang and lang ~= node.lang then
-			raise_error(node, ('%s node used in %s context'):format(node.lang, lang))
+			Dsl.raise_error(node, ('%s node used in %s context'):format(node.lang, lang))
 		end
 
 		if type(node.resolve) == 'function' then
@@ -292,7 +292,7 @@ Element.__index = Element
 Element.lang = 'html'
 Dsl.Element = Element
 
--- currying for passing extra arguments
+-- currying
 function Element:__call(extra_args)
 	local clone = util.shallow_copy(self)
 	capture_trace(clone, 3)
@@ -413,7 +413,7 @@ local Component = {}
 Component.__index = Component
 Dsl.Component = Component
 
--- currying for passing extra arguments
+-- currying
 function Component:__call(extra_args)
 	local clone = util.shallow_copy(self)
 	capture_trace(clone, 3)
@@ -455,8 +455,9 @@ function Component.new(name, render_fn, lang)
 end
 
 function Component:resolve(parent, ctx, lang)
+	local inner = self:render_fn(parent, self.args, ctx)
 	-- components are inlined, and modifiers apply to their parentsd
-	return resolve_node(parent, self.render_fn(self.args, ctx), ctx, self.lang or lang)
+	return resolve_node(parent, inner, ctx, self.lang or lang)
 end
 
 function Dsl.register_component(filepath)
@@ -480,8 +481,22 @@ local Modifier = {}
 Modifier.__index = Modifier
 Dsl.Modifier = Modifier
 
+-- currying
+function Modifier:__call(...)
+	local clone = util.shallow_copy(self)
+	capture_trace(clone, 3)
+
+	clone.args = util.shallow_copy(self.args)
+
+	for _, v in ipairs({ ... }) do
+		clone.args[#clone.args + 1] = v
+	end
+
+	return clone
+end
+
 function Modifier.new(name, apply_fn, lang)
-	return function(args)
+	return function(...)
 		local self = setmetatable({}, Modifier)
 		capture_trace(self, 3)
 
@@ -489,10 +504,11 @@ function Modifier.new(name, apply_fn, lang)
 		self.lang = lang -- nil is fine
 		self.apply_fn = apply_fn
 
-		if type(args) ~= 'table' then
-			self.args = { args }
-		else
-			self.args = args
+		self.args = { ... }
+
+		-- unwrap if it's a single table arg
+		if #self.args == 1 and type(self.args[1]) == 'table' then
+			self.args = self.args[1]
 		end
 
 		return self
@@ -501,18 +517,18 @@ end
 
 function Modifier:resolve(parent, ctx, _)
 	if parent then
-		self.apply_fn(self, parent, ctx, util.unpack(self.args))
+		self:apply_fn(parent, ctx, util.unpack(self.args))
 	else
-		raise_error(self, 'modifier used without a valid parent node')
+		Dsl.raise_error(self, 'modifier used without a valid parent node')
 	end
 
-	-- modifiers are erased from the AST
+	-- modifiers are erased from AST. we cannot return nil here, return empty fragment
 	return {}
 end
 -- }}}
 
 -- {{{ builtin components
-Dsl.If = Component.new('If', function(args, ctx)
+Dsl.If = Component.new('If', function(_, _, args, ctx)
 	local cond = args.cond
 	if cond == nil then
 		cond = args[1]
@@ -532,7 +548,7 @@ Dsl.If = Component.new('If', function(args, ctx)
 	end
 end)
 
-Dsl.ForEach = Component.new('ForEach', function(args, ctx)
+Dsl.ForEach = Component.new('ForEach', function(_, _, args, ctx)
 	local items = args.items or args[1]
 	local render = args.render or args[2]
 
@@ -551,30 +567,96 @@ Dsl.ForEach = Component.new('ForEach', function(args, ctx)
 	end
 	return fragment
 end)
+
+Dsl.Document = Component.new('Document', function(_, _, args, _)
+	return { Dsl.Raw('<!DOCTYPE html>\n'), Dsl.html(args) }
+end)
+
+Dsl.Classes = Component.new('Classes', function(self, _, arg, ctx)
+	local map
+
+	if type(arg) == 'function' then
+		map = arg(ctx)
+	elseif type(arg) == 'table' then
+		map = arg
+	else
+		Dsl.raise_error(self, 'argument to Classes should be table or fn(ctx) -> table')
+	end
+
+	local active = {}
+
+	for class, cond in pairs(map) do
+		local is_active
+		if type(cond) == 'function' then
+			is_active = cond(ctx)
+		else
+			is_active = cond
+		end
+
+		if is_active then
+			active[#active+1] = class
+		end
+	end
+
+	if #active > 0 then
+		return Dsl.Append('class', active)
+	end
+end, 'html')
+
+Dsl.Provide = Component.new('Provide', function(_, parent, args, ctx)
+	local provided_data = {}
+	local children = {}
+
+	for k, v in pairs(args) do
+		if type(k) == 'string' then
+			provided_data[k] = v
+		elseif type(k) == 'number' then
+			children[k] = v
+		end
+	end
+
+	local inner_ctx = setmetatable(provided_data, { __index = ctx })
+
+	local resolved = {}
+	for _, child in ipairs(children) do
+		local lang = type(child) == 'table' and child.lang or nil
+		for _, res in ipairs(resolve_node(parent, child, inner_ctx, lang)) do
+			resolved[#resolved+1] = res
+		end
+	end
+
+	return resolved
+end)
 -- }}}
 
 -- {{{ builtin modifiers
-Dsl.Set = Modifier.new('Set', function(_, element, _, k, v)
-	if element.props then
-		element.props[k] = v
+Dsl.Set = Modifier.new('Set', function(_, node, _, k, v)
+	if node.props then
+		node.props[k] = v
 	end
 end)
 
-Dsl.Append = Modifier.new('Append', function(_, node, _, key, values)
+Dsl.Append = Modifier.new('Append', function(_, node, _, k, ...)
 	if not node.props then return end
 
-	if type(values) ~= 'table' then
-		values = { values }
+	local values = {}
+
+	for _, val in ipairs({...}) do
+		if type(val) == 'table' then
+			for _, v in ipairs(val) do
+				values[#values+1] = v
+			end
+		else
+			values[#values+1] = val
+		end
 	end
 
-	local current = node.props[key]
+	if #values == 0 then return end
+
+	local current = node.props[k]
 
 	if current == nil then
-		-- make fresh array
-		node.props[key] = {}
-		for _, v in ipairs(values) do
-			node.props[key][#node.props[key]+1] = v
-		end
+		node.props[k] = values
 	elseif type(current) == 'table' then
 		-- append to existing array
 		for _, v in ipairs(values) do
@@ -582,9 +664,9 @@ Dsl.Append = Modifier.new('Append', function(_, node, _, key, values)
 		end
 	else
 		-- upgrade existing string to an array
-		node.props[key] = { current }
+		node.props[k] = { current }
 		for _, v in ipairs(values) do
-			node.props[key][#node.props[key]+1] = v
+			node.props[k][#node.props[k]+1] = v
 		end
 	end
 end)
@@ -595,9 +677,7 @@ end)
 setmetatable(Dsl, {
 	__index = function(env, k)
 		if _G[k] then return _G[k] end
-
 		if type(k) ~= 'string' then return nil end
-
 		if k:find('^%u') then
 			-- components always begin with uppercase
 			error(('unknown component "%s"'):format(k), 2)
@@ -612,11 +692,9 @@ setmetatable(Dsl, {
 		if type(k) ~= 'string' then
 			error(('cannot use non-string key "%s"'):format(tostring(k)), 2)
 		end
-
 		if rawget(env, k) ~= nil then
 			error(('component "%s" already exists'):format(k), 2)
 		end
-
 		if k:find('^%l') then
 			error(('component name "%s" cannot start with lowercase'):format(k), 2)
 		end
