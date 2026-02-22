@@ -1,3 +1,6 @@
+---@diagnostic disable: unused-local
+local util = require('util')
+
 local M = {}
 
 local html_escapes = {
@@ -105,5 +108,61 @@ function M.merge_attr(existing, new_value, mergeable)
 
 	return merged
 end
+
+-- local Node = {}
+-- Node.__index = Node
+-- M.Node = Node
+--
+-- function Node.new(subclass, initial_state)
+-- 	local self = setmetatable(initial_state or {}, subclass)
+-- 	M.capture_trace(self, 4) -- level 4 looks past the subclass ctor
+--
+-- 	self.props = self.props or {}
+-- 	self.children = self.children or {}
+--
+-- 	return self
+-- end
+--
+-- function Node:prop_is_mergeable(key)
+-- 	-- abstract
+-- 	return false -- default is to overwrite properties when merging
+-- end
+--
+-- function Node:build(builder, ctx, lang)
+-- 	-- abstract
+-- 	M.raise_error(self, 'build() not implemented on this Node')
+-- end
+--
+-- function Node:resolve(parent, ctx, lang)
+-- 	local resolved = {}
+-- 	for _, child in ipairs(self.children) do
+-- 		for _, res in ipairs(M.resolve_node(self, child, ctx, self.next_lang or lang)) do
+-- 			resolved[#resolved+1] = res
+-- 		end
+-- 	end
+-- 	self.children = resolved
+-- 	return { self }
+-- end
+--
+-- function Node:__call(args)
+-- 	local clone = util.shallow_copy(self)
+-- 	M.capture_trace(clone, 3)
+--
+-- 	clone.props = util.shallow_copy(self.props)
+-- 	clone.children = util.shallow_copy(self.children)
+--
+-- 	if type(args) ~= 'table' then args = { args } end
+--
+-- 	for k, v in util.spairs(args) do
+-- 		local key = k:gsub('_', '-')
+-- 		clone.props[key] = M.merge_attr(clone.props[key], v, self:prop_is_mergeable(key))
+-- 	end
+--
+-- 	for _, child in ipairs(args) do
+-- 		clone.children[#clone.children+1] = child
+-- 	end
+--
+-- 	return setmetatable(clone, getmetatable(self))
+-- end
 
 return M
