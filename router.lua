@@ -174,7 +174,7 @@ function Router.process(opts)
 			src = src,
 			rel_path = path,
 			-- TODO: fix non-html files
-			url = '/' .. path:gsub('%.lua$', '.html'):gsub('%.[^%.]+%.html$', '.%1')
+			url = '/' .. path:gsub('%.lua$', '.html'):gsub('%.[^%.]+%.html$', '.%1'),
 		}
 	end
 
@@ -204,6 +204,29 @@ function Router.process(opts)
 			end
 		else
 			util.log('skipping extensionless file ' .. src, 'info', 'router')
+		end
+	end
+
+	if #Dsl.global_styles > 0 then
+		local css_builder = Builder.new()
+		Dsl.render_global_css(css_builder, ctx)
+
+		local dst = out_dir .. '/bundle.css'
+		local f = io.open(dst, 'w')
+		if not f then
+			util.log(
+				('could not open file "%s" for writing'):format(dst),
+				'error',
+				'router'
+			)
+			return
+		end
+		if f then
+			f:write(css_builder:build())
+			f:close()
+			util.log('built global bundle.css', 'info', 'router')
+		else
+			util.log('failed to write bundle.css', 'error', 'router')
 		end
 	end
 end

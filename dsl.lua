@@ -253,6 +253,7 @@ function Rule:build(builder, ctx, parent)
 					end
 				end
 			else
+				if v == '' then v = '""' end
 				builder:push(prop .. ':' .. tostring(v) .. ';')
 				if i < #keys then
 					builder:newline()
@@ -284,6 +285,142 @@ function Rule:build(builder, ctx, parent)
 
 	self.selector = original_selector
 end
+
+Dsl.Vars = function(selector)
+	return function(args)
+		local new_args = {}
+		for k, v in util.spairs(args) do
+			new_args['--' .. k:gsub('_', '-')] = v
+		end
+		return Rule.new(selector)(new_args)
+	end
+end
+
+Dsl.Var = function(name)
+	return 'var(--' .. name:gsub('_', '-') .. ')'
+end
+
+-- TODO: is it worth having css units and functions syntax
+-- }}}
+
+-- {{{ CSS queries
+local Query = {}
+Query.__index = Query
+Query.lang = 'css'
+
+-- media { min_width = 600 } { ... }
+function Query:__call(args)
+	local clone = util.shallow_copy(self)
+	capture_trace(clone, 3)
+
+	clone.props = util.shallow_copy(self.props)
+	clone.children = util.shallow_copy(self.children)
+
+	-- string should be mapped to the raw prop
+	if type(args) == 'string' then
+		clone.props.raw = args
+		return clone
+	elseif type(args) ~= 'table' then
+		args = { args }
+	end
+
+	for k, v in util.spairs(args) do
+		clone.props[k:gsub('_', '-')] = v
+	end
+
+	for _, child in ipairs(args) do
+		clone.children[#clone.children+1] = child
+	end
+
+	return clone
+end
+
+function Query.new(name)
+	return function(args)
+		local self = setmetatable({}, Query)
+		capture_trace(self, 3)
+
+		self.name = name
+		self.props = {}
+		self.children = {}
+
+		-- intercept a bare string and map it to the raw prop
+		if type(args) == 'string' then
+			self.props.raw = args
+			args = {} -- clear args so the loops below safely do nothing
+		elseif type(args) ~= 'table' then
+			args = { args }
+		end
+
+		for k, v in util.spairs(args) do
+			self.props[k:gsub('_', '-')] = v
+		end
+
+		for _, v in ipairs(args) do
+			self.children[#self.children+1] = v
+		end
+
+		return self
+	end
+end
+Dsl.Query = Query.new
+
+function Query:resolve(_, ctx, _)
+	local resolved = {}
+	for _, child in ipairs(self.children) do
+		for _, res in ipairs(resolve_node(self, child, ctx, 'css')) do
+			resolved[#resolved+1] = res
+		end
+	end
+	self.children = resolved
+	return { self }
+end
+
+function Query:build(builder, ctx, parent)
+	local conditions = {}
+	local keys = {}
+
+	-- deterministic key ordering
+	for k in pairs(self.props) do
+		keys[#keys+1] = k
+	end
+	table.sort(keys)
+
+	for _, k in ipairs(keys) do
+		local v = self.props[k]
+		if k == 'raw' then
+			conditions[#conditions+1] = tostring(v)
+		elseif type(v) == 'boolean' then
+			if v then conditions[#conditions+1] = k end
+		else
+			conditions[#conditions+1] = '(' .. k .. ':' .. tostring(v) .. ')'
+		end
+	end
+
+	local query_str = table.concat(conditions, ' and ')
+
+	if query_str ~= '' then
+		builder:push(self.name .. ' ' .. query_str .. ' {')
+	else
+		builder:push(self.name .. ' {')
+	end
+
+	builder:indent()
+	builder:newline()
+
+	for i, child in ipairs(self.children) do
+		if type(child) == 'table' then
+			child:build(builder, ctx, self)
+		end
+		if i < #self.children then
+			builder:newline()
+		end
+	end
+
+	builder:unindent()
+	builder:newline()
+	builder:push('}')
+end
 -- }}}
 
 -- {{{ HTML elements
@@ -293,14 +430,13 @@ Element.lang = 'html'
 Dsl.Element = Element
 
 -- currying
-function Element:__call(extra_args)
+function Element:__call(args)
 	local clone = util.shallow_copy(self)
 	capture_trace(clone, 3)
 
 	clone.props = util.shallow_copy(self.props)
 	clone.children = util.shallow_copy(self.children)
 
-	local args = extra_args
 	if type(args) ~= 'table' then
 		args = { args }
 	end
@@ -414,7 +550,7 @@ Component.__index = Component
 Dsl.Component = Component
 
 -- currying
-function Component:__call(extra_args)
+function Component:__call(args)
 	local clone = util.shallow_copy(self)
 	capture_trace(clone, 3)
 
@@ -424,7 +560,6 @@ function Component:__call(extra_args)
 		clone.args = util.shallow_copy(self.args)
 	end
 
-	local args = extra_args
 	if type(args) ~= 'table' then
 		args = { args }
 	end
@@ -600,6 +735,7 @@ function For:resolve(parent, ctx, lang)
 	if type(self.items) == 'function' then
 		iter, state, var = self.items(ctx)
 	elseif type(self.items) == 'table' then
+		-- TODO: support dictionaries as well. unordered keys is an issue
 		iter, state, var = ipairs(self.items)
 	else
 		return {}
@@ -738,7 +874,7 @@ end)
 -- {{{ builtin modifiers
 Dsl.Set = Modifier.new('Set', function(_, node, _, k, v)
 	if node.props then
-		node.props[k] = v
+		node.props[k:gsub('_', '-')] = v
 	end
 end)
 
@@ -759,10 +895,11 @@ Dsl.Append = Modifier.new('Append', function(_, node, _, k, ...)
 
 	if #values == 0 then return end
 
-	local current = node.props[k]
+	local key, _ = k:gsub('_', '-')
+	local current = node.props[key]
 
 	if current == nil then
-		node.props[k] = values
+		node.props[key] = values
 	elseif type(current) == 'table' then
 		-- append to existing array
 		for _, v in ipairs(values) do
@@ -770,19 +907,48 @@ Dsl.Append = Modifier.new('Append', function(_, node, _, k, ...)
 		end
 	else
 		-- upgrade existing string to an array
-		node.props[k] = { current }
+		node.props[key] = { current }
 		for _, v in ipairs(values) do
-			node.props[k][#node.props[k]+1] = v
+			node.props[key][#node.props[key]+1] = v
 		end
 	end
 end)
+-- }}}
+
+-- {{{ global CSS extraction/bundling
+Dsl.global_styles = {}
+
+-- registers colocated CSS which is bundled into one file
+function Dsl.StyleSheet(args)
+	if type(args) ~= 'table' then
+		args = { args }
+	end
+
+	for _, rule in ipairs(args) do
+		Dsl.global_styles[#Dsl.global_styles+1] = rule
+	end
+
+	return nil
+end
+
+function Dsl.render_global_css(builder, ctx)
+	local resolved = resolve_node(nil, Dsl.global_styles, ctx, 'css')
+	for _, node in ipairs(resolved) do
+		if type(node) == 'table' then
+			node:build(builder, ctx, 'css')
+		else
+			builder:push(node)
+		end
+	end
+end
 -- }}}
 
 -- env setup to pass through globals, lazily create HTML elements,
 -- and handle write-only component registration
 setmetatable(Dsl, {
 	__index = function(env, k)
-		if _G[k] then return _G[k] end
+		-- HTML "table" element has a conflict with Lua's table library
+		if k ~= 'table' and _G[k] then return _G[k] end
 		if type(k) ~= 'string' then return nil end
 		if k:find('^%u') then
 			-- components always begin with uppercase
