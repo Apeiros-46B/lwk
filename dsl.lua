@@ -2,8 +2,21 @@ local util = require('util')
 
 local Dsl = {}
 
--- {{{ html handling helpers
-local attr_seps = {
+-- {{{ node handling helpers
+local css_attr_seps = {
+	['font-family'] = ', ',
+	['transition'] = ', ',
+	['transition-property'] = ', ',
+	['animation'] = ', ',
+	['animation-name'] = ', ',
+	['box-shadow'] = ', ',
+	['text-shadow'] = ', ',
+	['background-image'] = ', ',
+	['background'] = ', ',
+	['src'] = ', ',
+}
+
+local html_attr_seps = {
 	srcset = ', ',
 	accept = ', ',
 	class = ' ',
@@ -11,7 +24,7 @@ local attr_seps = {
 }
 
 function Dsl.register_attr_sep(attr, sep)
-	attr_seps[attr] = sep
+	html_attr_seps[attr] = sep
 end
 
 local is_void_element = {
@@ -118,7 +131,7 @@ local function merge_attr(existing, new_value, mergeable)
 
 	local merged = {}
 	if existing ~= nil then
-		if type(existing) == 'table' then
+		if type(existing) == 'table' and not getmetatable(existing) then
 			for _, v in ipairs(existing) do
 				merged[#merged+1] = v
 			end
@@ -128,7 +141,7 @@ local function merge_attr(existing, new_value, mergeable)
 	end
 
 	if new_value ~= nil then
-		if type(new_value) == 'table' then
+		if type(new_value) == 'table' and not getmetatable(new_value) then
 			for _, v in ipairs(new_value) do
 				merged[#merged+1] = v
 			end
@@ -175,6 +188,15 @@ end
 -- }}}
 
 -- {{{ CSS rules
+local Fallback = {}
+Fallback.__index = Fallback
+Fallback.lang = 'css'
+
+function Fallback.new(...)
+	return setmetatable({ values = {...} }, Fallback)
+end
+Dsl.Fallback = Fallback.new
+
 local Rule = {}
 Rule.__index = Rule
 Rule.lang = 'css'
@@ -242,8 +264,8 @@ function Rule:build(builder, ctx, parent)
 			local prop, _ = k:gsub('_', '-')
 			local v = self.props[k]
 
-			if type(v) == 'table' then
-				-- array-based fallbacks (color = { 'black', 'var(--theme)' })
+			if getmetatable(v) == Fallback then
+				-- fallback properties (color = Fallback('black', var 'bg'))
 				for j, sub_val in ipairs(v) do
 					builder:push(prop .. ':' .. tostring(sub_val) .. ';')
 
@@ -252,8 +274,22 @@ function Rule:build(builder, ctx, parent)
 						builder:newline()
 					end
 				end
+			elseif type(v) == 'table' and not getmetatable(v) then
+				-- auto-join literal arrays
+				local sep = css_attr_seps[prop] or ' '
+
+				-- we need to convert all values to string because keywords like
+				-- `display = flex` are actually tables with __tostring, not strings
+				local stringified = {}
+				for j, sub_val in ipairs(v) do
+					stringified[j] = tostring(sub_val)
+				end
+
+				builder:push(prop .. ':' .. table.concat(stringified, sep) .. ';')
+				if i < #keys then
+					builder:newline()
+				end
 			else
-				if v == '' then v = '""' end
 				builder:push(prop .. ':' .. tostring(v) .. ';')
 				if i < #keys then
 					builder:newline()
@@ -286,7 +322,52 @@ function Rule:build(builder, ctx, parent)
 	self.selector = original_selector
 end
 
-Dsl.Vars = function(selector)
+local Import = {}
+Import.__index = Import
+Import.lang = 'css'
+
+function Import.new(url)
+	local self = setmetatable({ url = url }, Import)
+	return capture_trace(self, 3)
+end
+Dsl.Import = Import.new
+
+function Import:resolve()
+	return { self }
+end
+
+function Import:build(builder, _, _)
+	local url_str = tostring(self.url)
+
+	if not url_str:match('^url%(') and not url_str:match('^"') and not url_str:match("^'") then
+		url_str = '"' .. url_str .. '"'
+	end
+
+	builder:push('@import ' .. url_str .. ';')
+end
+
+function Dsl.InlineSvg(filepath)
+	local f = io.open(filepath, 'r')
+	if not f then
+		util.log('could not open "' .. filepath .. '"', 'warn')
+		return 'none'
+	end
+
+	local content = f:read('*a')
+	f:close()
+
+	content = content:gsub('[\n\r\t]+', ' ')
+	content = content:gsub('%%', '%%25')
+	content = content:gsub('#', '%%23')
+	content = content:gsub('<', '%%3C')
+	content = content:gsub('>', '%%3E')
+	content = content:gsub('"', '%%22')
+	content = content:gsub("'", '%%27')
+
+	return "url('data:image/svg+xml;utf8," .. content .. "')"
+end
+
+function Dsl.Vars(selector)
 	return function(args)
 		local new_args = {}
 		for k, v in util.spairs(args) do
@@ -296,11 +377,40 @@ Dsl.Vars = function(selector)
 	end
 end
 
-Dsl.Var = function(name)
+function Dsl.var(name)
 	return 'var(--' .. name:gsub('_', '-') .. ')'
 end
 
--- TODO: is it worth having css units and functions syntax
+local css_units = {
+	'px', 'cm', 'mm', 'Q', 'pc', 'pt',
+	'em', 'ex', 'ch', 'rem', 'lh', 'rlh', 'cap', 'ic',
+	'vw', 'vh', 'vmin', 'vmax', 'vi', 'vb',
+	'svw', 'svh', 'svmin', 'svmax', 'svi', 'svb',
+	'lvw', 'lvh', 'lvmin', 'lvmax', 'lvi', 'lvb',
+	'dvw', 'dvh', 'dvmin', 'dvmax', 'dvi', 'dvb',
+	'cqw', 'cqh', 'cqi', 'cqb', 'cqmin', 'cqmax',
+	'deg', 'grad', 'rad', 'turn',
+	's', 'ms',
+	'dpi', 'dpcm', 'dppx', 'x',
+	'fr'
+}
+
+for _, unit in ipairs(css_units) do
+	Dsl[unit] = function(val)
+		return tostring(val) .. unit
+	end
+end
+
+function Dsl.pct(val)
+	return tostring(val) .. '%'
+end
+function Dsl.inch(val)
+	return tostring(val) .. 'in'
+end
+
+function Dsl.Str(str)
+	return '"' .. str .. '"'
+end
 -- }}}
 
 -- {{{ CSS queries
@@ -376,7 +486,7 @@ function Query:resolve(_, ctx, _)
 	return { self }
 end
 
-function Query:build(builder, ctx, parent)
+function Query:build(builder, ctx, _)
 	local conditions = {}
 	local keys = {}
 
@@ -429,6 +539,44 @@ Element.__index = Element
 Element.lang = 'html'
 Dsl.Element = Element
 
+-- HACK: make conflicting HTML tags and CSS keywords (e.g. "table") dual-purpose. when called,
+-- they act like an HTML tag. when referenced, they act like strings
+local ElementCtor = {}
+
+function ElementCtor:__call(args)
+	local node = setmetatable({}, Element)
+	capture_trace(node, 3)
+
+	node.tag = self.tag
+	node.is_void = is_void_element[self.tag] or false
+	node.props = {}
+	node.children = {}
+
+	if self.tag == 'style' then
+		-- switch to css for children when this is a style node
+		node.next_lang = 'css'
+	end
+
+	if type(args) ~= 'table' then
+		args = { args }
+	end
+
+	for k, v in util.spairs(args) do
+		node.props[k:gsub('_', '-')] = v
+	end
+
+	for _, v in ipairs(args) do
+		node.children[#node.children+1] = v
+	end
+
+	return node
+end
+
+function ElementCtor:__tostring()
+	-- return the tag, so user can write `align_items = center` nicely
+	return self.tag
+end
+
 -- currying
 function Element:__call(args)
 	local clone = util.shallow_copy(self)
@@ -442,7 +590,7 @@ function Element:__call(args)
 	end
 
 	for k, v in util.spairs(args) do
-		clone.props[k] = merge_attr(clone.props[k], v, attr_seps[k] ~= nil)
+		clone.props[k] = merge_attr(clone.props[k], v, html_attr_seps[k] ~= nil)
 	end
 
 	for _, child in ipairs(args) do
@@ -453,35 +601,7 @@ function Element:__call(args)
 end
 
 function Element.new(tag)
-	return function(args)
-		local self = setmetatable({}, Element)
-		capture_trace(self, 3)
-
-		self.tag = tag
-		self.is_void = is_void_element[tag] or false
-
-		self.props = {}
-		self.children = {}
-
-		if tag == 'style' then
-			-- switch to css for children when this is a style node
-			self.next_lang = 'css'
-		end
-
-		if type(args) ~= 'table' then
-			args = { args }
-		end
-
-		for k, v in util.spairs(args) do
-			self.props[k:gsub('_', '-')] = v
-		end
-
-		for _, v in ipairs(args) do
-			self.children[#self.children+1] = v
-		end
-
-		return self
-	end
+	return setmetatable({ tag = tag:gsub('_', '-') }, ElementCtor)
 end
 
 function Element:resolve(_, ctx, lang)
@@ -510,8 +630,8 @@ function Element:build(builder, ctx, lang)
 		local v = self.props[k]
 
 		local str
-		if type(v) == 'table' then
-			local sep = attr_seps[k] or ' '
+		if type(v) == 'table' and not getmetatable(v) then
+			local sep = html_attr_seps[k] or ' '
 			str = table.concat(v, sep)
 		else
 			str = tostring(v)
@@ -565,7 +685,7 @@ function Component:__call(args)
 	end
 
 	for k, v in util.spairs(args) do
-		clone.args[k] = merge_attr(clone.args[k], v, attr_seps[k] ~= nil)
+		clone.args[k] = merge_attr(clone.args[k], v, html_attr_seps[k] ~= nil)
 	end
 
 	for _, child in ipairs(args) do
@@ -642,7 +762,7 @@ function Modifier.new(name, apply_fn, lang)
 		self.args = { ... }
 
 		-- unwrap if it's a single table arg
-		if #self.args == 1 and type(self.args[1]) == 'table' then
+		if #self.args == 1 and type(self.args[1]) == 'table' and not getmetatable(self.args[1]) then
 			self.args = self.args[1]
 		end
 
@@ -734,7 +854,7 @@ function For:resolve(parent, ctx, lang)
 	local iter, state, var
 	if type(self.items) == 'function' then
 		iter, state, var = self.items(ctx)
-	elseif type(self.items) == 'table' then
+	elseif type(self.items) == 'table' and not getmetatable(self.items) then
 		-- TODO: support dictionaries as well. unordered keys is an issue
 		iter, state, var = ipairs(self.items)
 	else
@@ -819,7 +939,7 @@ Dsl.Classes = Component.new('Classes', function(self, _, arg, ctx)
 
 	if type(arg) == 'function' then
 		map = arg(ctx)
-	elseif type(arg) == 'table' then
+	elseif type(arg) == 'table' and not getmetatable(arg) then
 		map = arg
 	else
 		Dsl.raise_error(self, 'argument to Classes should be table or fn(ctx) -> table')
@@ -884,7 +1004,7 @@ Dsl.Append = Modifier.new('Append', function(_, node, _, k, ...)
 	local values = {}
 
 	for _, val in ipairs({...}) do
-		if type(val) == 'table' then
+		if type(val) == 'table' and not getmetatable(val) then
 			for _, v in ipairs(val) do
 				values[#values+1] = v
 			end
@@ -900,7 +1020,7 @@ Dsl.Append = Modifier.new('Append', function(_, node, _, k, ...)
 
 	if current == nil then
 		node.props[key] = values
-	elseif type(current) == 'table' then
+	elseif type(current) == 'table' and not getmetatable(current) then
 		-- append to existing array
 		for _, v in ipairs(values) do
 			current[#current+1] = v
@@ -919,20 +1039,37 @@ end)
 Dsl.global_styles = {}
 
 -- registers colocated CSS which is bundled into one file
-function Dsl.StyleSheet(args)
+function Dsl.GlobalStyles(priority, args)
+	if type(priority) ~= 'number' then
+		args = priority
+		priority = 50
+	end
+
 	if type(args) ~= 'table' then
 		args = { args }
 	end
 
-	for _, rule in ipairs(args) do
-		Dsl.global_styles[#Dsl.global_styles+1] = rule
+	for _, node in ipairs(args) do
+		Dsl.global_styles[#Dsl.global_styles+1] = {
+			priority = priority,
+			node = node,
+		}
 	end
 
 	return nil
 end
 
 function Dsl.render_global_css(builder, ctx)
-	local resolved = resolve_node(nil, Dsl.global_styles, ctx, 'css')
+	table.sort(Dsl.global_styles, function(a, b)
+		return a.priority < b.priority
+	end)
+
+	local nodes = {}
+	for _, entry in ipairs(Dsl.global_styles) do
+		nodes[#nodes+1] = entry.node
+	end
+
+	local resolved = resolve_node(nil, nodes, ctx, 'css')
 	for _, node in ipairs(resolved) do
 		if type(node) == 'table' then
 			node:build(builder, ctx, 'css')
@@ -941,6 +1078,9 @@ function Dsl.render_global_css(builder, ctx)
 		end
 	end
 end
+
+Dsl.global_css_path = '/bundle.css'
+Dsl.LinkGlobalStyles = Element.new('link') { rel = 'stylesheet', href = Dsl.global_css_path }
 -- }}}
 
 -- env setup to pass through globals, lazily create HTML elements,

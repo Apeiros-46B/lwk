@@ -211,7 +211,7 @@ function Router.process(opts)
 		local css_builder = Builder.new()
 		Dsl.render_global_css(css_builder, ctx)
 
-		local dst = out_dir .. '/bundle.css'
+		local dst = out_dir .. Dsl.global_css_path
 		local f = io.open(dst, 'w')
 		if not f then
 			util.log(
@@ -221,13 +221,9 @@ function Router.process(opts)
 			)
 			return
 		end
-		if f then
-			f:write(css_builder:build())
-			f:close()
-			util.log('built global bundle.css', 'info', 'router')
-		else
-			util.log('failed to write bundle.css', 'error', 'router')
-		end
+		f:write(css_builder:build())
+		f:close()
+		util.log('built global css', 'info', 'router')
 	end
 end
 
