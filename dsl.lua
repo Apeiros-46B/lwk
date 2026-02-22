@@ -1,8 +1,8 @@
 local util = require('util')
+local core = require('dsl.core')
 
 local Dsl = {}
 
--- {{{ node handling helpers
 local css_attr_seps = {
 	['font-family'] = ', ',
 	['transition'] = ', ',
@@ -23,10 +23,6 @@ local html_attr_seps = {
 	style = ';',
 }
 
-function Dsl.register_attr_sep(attr, sep)
-	html_attr_seps[attr] = sep
-end
-
 local is_void_element = {
 	area = true,
 	base = true,
@@ -43,119 +39,10 @@ local is_void_element = {
 	wbr = true,
 }
 
-local html_escapes = {
-	['&'] = '&amp;',
-	['<'] = '&lt;',
-	['>'] = '&gt;',
-	['"'] = '&quot;',
-	["'"] = '&#39;'
-}
-
-local function escape_html(str)
-	local res, _ = str:gsub("[&<>\"']", html_escapes)
-	return res
-end
--- }}}
-
--- {{{ debug logging helpers
-local function capture_trace(obj, level)
-	-- level 3 = user code calling the closure
-	level = level or 3
-	local info = debug.getinfo(level, 'Sl')
-	if info then
-		obj.debug_src = ('%s:%d'):format(info.short_src, info.currentline)
-	else
-		obj.debug_src = 'unknown location'
-	end
-	obj.debug_trace = debug.traceback('', level)
-	return obj
-end
-
-function Dsl.raise_error(node, msg)
-	local fmt = [[
-[DSL] %s
-  Location: %s
-  Context:  %s
-	]]
-	local err = fmt:format(
-		msg,
-		node.debug_src or 'unknown location',
-		node.debug_trace or ''
-	)
-	error(err, 0)
-end
--- }}}
-
--- {{{ tree building helpers
--- parent is the current node that we're pushing into (target of modifiers).
--- components pass their parent instead of themselves so nested modifiers apply properly
-local function resolve_node(parent, node, ctx, lang)
-	local ty = type(node)
-	if not node then return {} end
-
-	if ty == 'string' or ty == 'number' then
-		local str = tostring(node)
-		if lang == 'html' then
-			return { escape_html(str) }
-		else
-			-- don't escape raw strings in CSS
-			return { str }
-		end
-	elseif ty == 'function' then
-		return resolve_node(parent, node(ctx), ctx, lang)
-	elseif ty == 'table' then
-		if lang and node.lang and lang ~= node.lang then
-			Dsl.raise_error(node, ('%s node used in %s context'):format(node.lang, lang))
-		end
-
-		if type(node.resolve) == 'function' then
-			return node:resolve(parent, ctx, lang)
-		else
-			-- implicit fragment
-			local resolved = {}
-			for _, child in ipairs(node) do
-				for _, res in ipairs(resolve_node(parent, child, ctx, lang)) do
-					resolved[#resolved+1] = res
-				end
-			end
-			return resolved
-		end
-	end
-	return {}
-end
-
-local function merge_attr(existing, new_value, mergeable)
-	if not mergeable then
-		return new_value
-	end
-
-	local merged = {}
-	if existing ~= nil then
-		if type(existing) == 'table' and not getmetatable(existing) then
-			for _, v in ipairs(existing) do
-				merged[#merged+1] = v
-			end
-		else
-			merged[#merged+1] = existing
-		end
-	end
-
-	if new_value ~= nil then
-		if type(new_value) == 'table' and not getmetatable(new_value) then
-			for _, v in ipairs(new_value) do
-				merged[#merged+1] = v
-			end
-		else
-			merged[#merged+1] = new_value
-		end
-	end
-
-	return merged
-end
 
 function Dsl.render(root, builder, ctx, lang)
 	lang = lang or 'html'
-	local resolved = resolve_node(nil, root, ctx, lang)
+	local resolved = core.resolve_node(nil, root, ctx, lang)
 	for _, node in ipairs(resolved) do
 		if type(node) == 'table' then
 			node:build(builder, ctx, lang)
@@ -164,7 +51,6 @@ function Dsl.render(root, builder, ctx, lang)
 		end
 	end
 end
--- }}}
 
 -- {{{ raw strings
 local Raw = {}
@@ -204,7 +90,7 @@ Rule.lang = 'css'
 function Rule.new(selector)
 	return function(args)
 		local self = setmetatable({}, Rule)
-		capture_trace(self, 3)
+		core.capture_trace(self, 3)
 
 		self.selector = selector
 		self.props = {}
@@ -226,7 +112,7 @@ Dsl.Rule = Rule.new
 function Rule:resolve(_, ctx, _)
 	local resolved = {}
 	for _, child in ipairs(self.children) do
-		for _, res in ipairs(resolve_node(self, child, ctx, 'css')) do
+		for _, res in ipairs(core.resolve_node(self, child, ctx, 'css')) do
 			resolved[#resolved+1] = res
 		end
 	end
@@ -328,7 +214,7 @@ Import.lang = 'css'
 
 function Import.new(url)
 	local self = setmetatable({ url = url }, Import)
-	return capture_trace(self, 3)
+	return core.capture_trace(self, 3)
 end
 Dsl.Import = Import.new
 
@@ -421,7 +307,7 @@ Query.lang = 'css'
 -- media { min_width = 600 } { ... }
 function Query:__call(args)
 	local clone = util.shallow_copy(self)
-	capture_trace(clone, 3)
+	core.capture_trace(clone, 3)
 
 	clone.props = util.shallow_copy(self.props)
 	clone.children = util.shallow_copy(self.children)
@@ -448,7 +334,7 @@ end
 function Query.new(name)
 	return function(args)
 		local self = setmetatable({}, Query)
-		capture_trace(self, 3)
+		core.capture_trace(self, 3)
 
 		self.name = name
 		self.props = {}
@@ -478,7 +364,7 @@ Dsl.Query = Query.new
 function Query:resolve(_, ctx, _)
 	local resolved = {}
 	for _, child in ipairs(self.children) do
-		for _, res in ipairs(resolve_node(self, child, ctx, 'css')) do
+		for _, res in ipairs(core.resolve_node(self, child, ctx, 'css')) do
 			resolved[#resolved+1] = res
 		end
 	end
@@ -545,7 +431,7 @@ local ElementCtor = {}
 
 function ElementCtor:__call(args)
 	local node = setmetatable({}, Element)
-	capture_trace(node, 3)
+	core.capture_trace(node, 3)
 
 	node.tag = self.tag
 	node.is_void = is_void_element[self.tag] or false
@@ -580,7 +466,7 @@ end
 -- currying
 function Element:__call(args)
 	local clone = util.shallow_copy(self)
-	capture_trace(clone, 3)
+	core.capture_trace(clone, 3)
 
 	clone.props = util.shallow_copy(self.props)
 	clone.children = util.shallow_copy(self.children)
@@ -590,7 +476,7 @@ function Element:__call(args)
 	end
 
 	for k, v in util.spairs(args) do
-		clone.props[k] = merge_attr(clone.props[k], v, html_attr_seps[k] ~= nil)
+		clone.props[k] = core.merge_attr(clone.props[k], v, html_attr_seps[k] ~= nil)
 	end
 
 	for _, child in ipairs(args) do
@@ -607,7 +493,7 @@ end
 function Element:resolve(_, ctx, lang)
 	local resolved = {}
 	for _, child in ipairs(self.children) do
-		for _, res in ipairs(resolve_node(self, child, ctx, self.next_lang or lang)) do
+		for _, res in ipairs(core.resolve_node(self, child, ctx, self.next_lang or lang)) do
 			resolved[#resolved+1] = res
 		end
 	end
@@ -636,7 +522,7 @@ function Element:build(builder, ctx, lang)
 		else
 			str = tostring(v)
 		end
-		builder:push(' ' .. prop .. '="' .. escape_html(str) .. '"')
+		builder:push(' ' .. prop .. '="' .. core.escape_html(str) .. '"')
 	end
 	builder:push('>')
 
@@ -672,7 +558,7 @@ Dsl.Component = Component
 -- currying
 function Component:__call(args)
 	local clone = util.shallow_copy(self)
-	capture_trace(clone, 3)
+	core.capture_trace(clone, 3)
 
 	if type(self.args) ~= 'table' then
 		clone.args = { self.args }
@@ -685,7 +571,7 @@ function Component:__call(args)
 	end
 
 	for k, v in util.spairs(args) do
-		clone.args[k] = merge_attr(clone.args[k], v, html_attr_seps[k] ~= nil)
+		clone.args[k] = core.merge_attr(clone.args[k], v, html_attr_seps[k] ~= nil)
 	end
 
 	for _, child in ipairs(args) do
@@ -698,7 +584,7 @@ end
 function Component.new(name, render_fn, lang)
 	return function(args)
 		local self = setmetatable({}, Component)
-		capture_trace(self, 3)
+		core.capture_trace(self, 3)
 
 		self.tag = name
 		self.lang = lang -- nil is fine
@@ -712,7 +598,7 @@ end
 function Component:resolve(parent, ctx, lang)
 	local inner = self:render_fn(parent, self.args, ctx)
 	-- components are inlined, and modifiers apply to their parentsd
-	return resolve_node(parent, inner, ctx, self.lang or lang)
+	return core.resolve_node(parent, inner, ctx, self.lang or lang)
 end
 
 function Dsl.register_component(filepath)
@@ -739,7 +625,7 @@ Dsl.Modifier = Modifier
 -- currying
 function Modifier:__call(...)
 	local clone = util.shallow_copy(self)
-	capture_trace(clone, 3)
+	core.capture_trace(clone, 3)
 
 	clone.args = util.shallow_copy(self.args)
 
@@ -753,7 +639,7 @@ end
 function Modifier.new(name, apply_fn, lang)
 	return function(...)
 		local self = setmetatable({}, Modifier)
-		capture_trace(self, 3)
+		core.capture_trace(self, 3)
 
 		self.name = name
 		self.lang = lang -- nil is fine
@@ -808,7 +694,7 @@ end
 
 function If.new(cond)
 	local self = setmetatable({ cond = cond }, If)
-	capture_trace(self, 2)
+	core.capture_trace(self, 2)
 	return self
 end
 Dsl.If = If.new
@@ -824,7 +710,7 @@ function If:resolve(parent, ctx, lang)
 	local branch = eval_cond and self.true_branch or self.false_branch
 	if not branch then return {} end
 
-	return resolve_node(parent, branch, ctx, lang)
+	return core.resolve_node(parent, branch, ctx, lang)
 end
 
 local For = {}
@@ -845,7 +731,7 @@ end
 
 function For.new(items)
 	local self = setmetatable({ items = items }, For)
-	capture_trace(self, 2)
+	core.capture_trace(self, 2)
 	return self
 end
 Dsl.For = For.new
@@ -870,7 +756,7 @@ function For:resolve(parent, ctx, lang)
 		end
 	end
 
-	return resolve_node(parent, fragment, ctx, lang)
+	return core.resolve_node(parent, fragment, ctx, lang)
 end
 
 local Switch = {}
@@ -900,7 +786,7 @@ end
 
 function Switch.new(value)
 	local self = setmetatable({ value = value }, Switch)
-	capture_trace(self, 2)
+	core.capture_trace(self, 2)
 	return self
 end
 Dsl.Switch = Switch.new
@@ -919,9 +805,9 @@ function Switch:resolve(parent, ctx, lang)
 	end
 
 	if branch ~= nil then
-		return resolve_node(parent, branch, ctx, lang)
+		return core.resolve_node(parent, branch, ctx, lang)
 	elseif self.default ~= nil then
-		return resolve_node(parent, self.default, ctx, lang)
+		return core.resolve_node(parent, self.default, ctx, lang)
 	end
 
 	-- no match and no default block, remove ourselves from the tree
@@ -982,7 +868,7 @@ Dsl.Provide = Component.new('Provide', function(_, parent, args, ctx)
 	local resolved = {}
 	for _, child in ipairs(children) do
 		local lang = type(child) == 'table' and child.lang or nil
-		for _, res in ipairs(resolve_node(parent, child, inner_ctx, lang)) do
+		for _, res in ipairs(core.resolve_node(parent, child, inner_ctx, lang)) do
 			resolved[#resolved+1] = res
 		end
 	end
@@ -1069,7 +955,7 @@ function Dsl.render_global_css(builder, ctx)
 		nodes[#nodes+1] = entry.node
 	end
 
-	local resolved = resolve_node(nil, nodes, ctx, 'css')
+	local resolved = core.resolve_node(nil, nodes, ctx, 'css')
 	for _, node in ipairs(resolved) do
 		if type(node) == 'table' then
 			node:build(builder, ctx, 'css')
