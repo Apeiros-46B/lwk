@@ -1,3 +1,4 @@
+-- TODO: per-folder context.lua files which allow adding to the context for only the files in that folder and its subfolders (recursive inheritance)
 local util = require('util')
 local Builder = require('builder')
 local Dsl = require('dsl')
@@ -27,7 +28,7 @@ local function mkdir_parent(path)
 	end
 end
 
-Router.register_handler('passthrough', function(_, src, dst_dir, rel_path)
+Router.register_handler('passthrough', function(_, src, dst_dir, rel_path, _)
 	local dst = dst_dir .. '/' .. rel_path
 	mkdir_parent(dst)
 
@@ -41,7 +42,7 @@ Router.register_handler('passthrough', function(_, src, dst_dir, rel_path)
 	util.log('passed through ' .. rel_path, 'info', 'router')
 end)
 
-Router.register_handler('build', function(ctx, src, dst_dir, rel_path)
+Router.register_handler('build', function(ctx, src, dst_dir, rel_path, filename)
 	-- extract target extension from filename (e.g., .css.lua, .xml.lua)
 	local base_path, target_ext = rel_path:match('^(.-)%.([^%.]+)%.lua$')
 
@@ -60,6 +61,14 @@ Router.register_handler('build', function(ctx, src, dst_dir, rel_path)
 	local dst = dst_dir .. '/' .. dst_rel_path
 	mkdir_parent(dst)
 
+	-- DOCUMENT: reserved ctx names
+	local local_ctx = setmetatable({
+		rel_path = rel_path,
+		dst_rel_path = dst_rel_path,
+		filename = filename,
+		manifest = ctx.manifest or {},
+	}, { __index = ctx })
+
 	local page = util.eval_with_env(src, Dsl)
 	if not page then
 		util.log(('file "%s" returned nil, skipping build'):format(src), 'warn', 'router')
@@ -67,7 +76,7 @@ Router.register_handler('build', function(ctx, src, dst_dir, rel_path)
 	end
 
 	local builder = Builder.new()
-	Dsl.render(page, builder, ctx, out_lang)
+	Dsl.render(page, builder, local_ctx, out_lang)
 
 	local f = io.open(dst, 'w')
 	if not f then
@@ -121,12 +130,11 @@ function Router.scan_dir(dir)
 end
 
 function Router.process(opts)
+	-- component instantiation should not affect other components
+	local ctx = util.freeze(opts.ctx)
 	local in_dir = opts.input_dir
 	local out_dir = opts.output_dir
 	local comp_dir = opts.components_dir
-
-	-- component evaluation should not be able to affect other components
-	local ctx = util.freeze(opts.ctx)
 
 	os.execute(string.format([[mkdir -p '%s']], out_dir))
 
@@ -150,7 +158,7 @@ function Router.process(opts)
 				local dst_rel_path = 'components/' .. rel_path
 				local handler = Router.handlers['passthrough']
 				if handler then
-					handler(ctx, src, out_dir, dst_rel_path, filename)
+					handler(opts.ctx, src, out_dir, dst_rel_path, filename)
 				end
 			end
 		end
@@ -158,6 +166,23 @@ function Router.process(opts)
 
 	local in_files = Router.scan_dir(in_dir)
 	local in_prefix = in_dir:gsub('/+$', '') .. '/'
+
+	local manifest = {}
+	for _, src in ipairs(in_files) do
+		local path = src:sub(#in_prefix + 1)
+		manifest[#manifest+1] = {
+			src = src,
+			rel_path = path,
+			-- TODO: fix non-html files
+			url = '/' .. path:gsub('%.lua$', '.html'):gsub('%.[^%.]+%.html$', '.%1')
+		}
+	end
+
+	local global_ctx = util.shallow_copy(opts.ctx)
+	global_ctx.manifest = manifest
+
+	-- page instantiations should not affect each other
+	ctx = util.freeze(global_ctx)
 
 	for _, src in ipairs(in_files) do
 		local rel_path = src
