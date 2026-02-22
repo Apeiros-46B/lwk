@@ -75,7 +75,7 @@ end
 
 -- {{{ tree building helpers
 -- parent is the current node that we're pushing into (target of modifiers).
--- "If", "For", and similar constructs pass their parent instead of themselves
+-- components pass their parent instead of themselves so nested modifiers apply properly
 local function resolve_node(parent, node, ctx, lang)
 	local ty = type(node)
 	if not node then return {} end
@@ -527,47 +527,153 @@ function Modifier:resolve(parent, ctx, _)
 end
 -- }}}
 
--- {{{ builtin components
-Dsl.If = Component.new('If', function(_, _, args, ctx)
-	local cond = args.cond
-	if cond == nil then
-		cond = args[1]
+-- {{{ builtin control flow
+local If = {}
+If.__index = If
+
+-- If(cond) { 'if_true' } { 'if_false' }
+function If:__call(children)
+	local clone = util.shallow_copy(self)
+
+	if type(children) ~= 'table' then
+		children = { children }
 	end
 
-	local evaluated_cond
-	if type(cond) == 'function' then
-		evaluated_cond = cond(ctx)
+	-- true branch comes first
+	if not clone.true_branch then
+		clone.true_branch = children
+	elseif not clone.false_branch then
+		clone.false_branch = children
 	else
-		evaluated_cond = cond
+		Dsl.raise_error(self, 'If already has both true and false branches')
 	end
 
-	if evaluated_cond then
-		return args.if_true or args[2]
+	return clone
+end
+
+function If.new(cond)
+	local self = setmetatable({ cond = cond }, If)
+	capture_trace(self, 2)
+	return self
+end
+Dsl.If = If.new
+
+function If:resolve(parent, ctx, lang)
+	local eval_cond
+	if type(self.cond) == 'function' then
+		eval_cond = self.cond(ctx)
 	else
-		return args.if_false or args[3]
+		eval_cond = self.cond
 	end
-end)
 
-Dsl.ForEach = Component.new('ForEach', function(_, _, args, ctx)
-	local items = args.items or args[1]
-	local render = args.render or args[2]
+	local branch = eval_cond and self.true_branch or self.false_branch
+	if not branch then return {} end
 
+	return resolve_node(parent, branch, ctx, lang)
+end
+
+local For = {}
+For.__index = For
+
+-- For(items) { fn }
+function For:__call(args)
+	local clone = util.shallow_copy(self)
+
+	if not clone.render_fn then
+		clone.render_fn = type(args) == 'table' and args[1] or args
+	else
+		Dsl.raise_error(self, 'For can only have one block')
+	end
+
+	return clone
+end
+
+function For.new(items)
+	local self = setmetatable({ items = items }, For)
+	capture_trace(self, 2)
+	return self
+end
+Dsl.For = For.new
+
+function For:resolve(parent, ctx, lang)
 	local iter, state, var
-	if type(items) == 'function' then
-		iter, state, var = items(ctx)
-	elseif type(items) == 'table' then
-		iter, state, var = ipairs(items)
+	if type(self.items) == 'function' then
+		iter, state, var = self.items(ctx)
+	elseif type(self.items) == 'table' then
+		iter, state, var = ipairs(self.items)
 	else
-		return nil
+		return {}
 	end
 
 	local fragment = {}
 	for k, v in iter, state, var do
-		fragment[#fragment+1] = render(k, v, ctx)
+		if self.render_fn then
+			fragment[#fragment+1] = self.render_fn(v, k, ctx)
+		else
+			Dsl.raise_error(self, 'attempt to render uninitialized For')
+		end
 	end
-	return fragment
-end)
 
+	return resolve_node(parent, fragment, ctx, lang)
+end
+
+local Switch = {}
+Switch.__index = Switch
+
+-- Switch(value) { a = 'if_is_a', b = 'if_is_b', c = 'if_is_c' } { 'default' }
+function Switch:__call(args)
+	local clone = util.shallow_copy(self)
+
+	-- cases table comes first, then default comes second
+	if not clone.cases then
+		if type(args) ~= 'table' then
+			Dsl.raise_error(self, 'Switch expects a table of cases')
+		end
+		clone.cases = args
+	elseif not clone.default then
+		if type(args) ~= 'table' then
+			args = { args }
+		end
+		clone.default = args
+	else
+		Dsl.raise_error(self, 'Switch already has both cases and a default branch')
+	end
+
+	return clone
+end
+
+function Switch.new(value)
+	local self = setmetatable({ value = value }, Switch)
+	capture_trace(self, 2)
+	return self
+end
+Dsl.Switch = Switch.new
+
+function Switch:resolve(parent, ctx, lang)
+	if not self.cases then return {} end
+
+	local val = self.value
+	if type(val) == 'function' then
+		val = val(ctx)
+	end
+
+	local branch
+	if val ~= nil then
+		branch = self.cases[val]
+	end
+
+	if branch ~= nil then
+		return resolve_node(parent, branch, ctx, lang)
+	elseif self.default ~= nil then
+		return resolve_node(parent, self.default, ctx, lang)
+	end
+
+	-- no match and no default block, remove ourselves from the tree
+	return {}
+end
+-- }}}
+
+-- {{{ builtin components
 Dsl.Document = Component.new('Document', function(_, _, args, _)
 	return { Dsl.Raw('<!DOCTYPE html>\n'), Dsl.html(args) }
 end)
