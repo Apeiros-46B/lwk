@@ -26,85 +26,25 @@ local is_void_element = {
 	wbr = true,
 }
 
-local Element = {}
+local Element = setmetatable({}, { __index = core.Node })
 Element.__index = Element
-Element.lang = 'html'
+Element.__call = core.Node.__call
 M.Element = Element
 
--- HACK: make conflicting HTML tags and CSS keywords (e.g. "table") dual-purpose.
--- when called, they act like an HTML tag. when referenced, they act like strings
-local ElementCtor = {}
-
-function ElementCtor:__call(args)
-	local node = setmetatable({}, Element)
-	core.capture_trace(node, 3)
-
-	node.tag = self.tag
-	node.is_void = is_void_element[self.tag] or false
-	node.props = {}
-	node.children = {}
-
-	if self.tag == 'style' then
-		-- switch to css for children when this is a style node
-		node.next_lang = 'css'
-	end
-
-	if type(args) ~= 'table' then
-		args = { args }
-	end
-
-	for k, v in util.spairs(args) do
-		node.props[k:gsub('_', '-')] = v
-	end
-
-	for _, v in ipairs(args) do
-		node.children[#node.children+1] = v
-	end
-
-	return node
-end
-
-function ElementCtor:__tostring()
-	-- return the tag, so user can write `align_items = center` nicely
-	return self.tag
-end
-
--- currying
-function Element:__call(args)
-	local clone = util.shallow_copy(self)
-	core.capture_trace(clone, 3)
-
-	clone.props = util.shallow_copy(self.props)
-	clone.children = util.shallow_copy(self.children)
-
-	if type(args) ~= 'table' then
-		args = { args }
-	end
-
-	for k, v in util.spairs(args) do
-		clone.props[k] = core.merge_attr(clone.props[k], v, M.attr_seps[k] ~= nil)
-	end
-
-	for _, child in ipairs(args) do
-		clone.children[#clone.children+1] = child
-	end
-
-	return clone
-end
+-- automagically interpret uncalled "elements" as CSS keywords e.g.
+-- "align_items = center," -> "align-items: center;"
+Element.__tostring = function(self) return self.tag end
 
 function Element.new(tag)
-	return setmetatable({ tag = tag:gsub('_', '-') }, ElementCtor)
+	return core.Node.new(Element, {
+		tag = tag:gsub('_', '-'),
+		is_void = is_void_element[tag] or false,
+		next_lang = tag == 'style' and 'css' or nil
+	})
 end
 
-function Element:resolve(_, ctx, lang)
-	local resolved = {}
-	for _, child in ipairs(self.children) do
-		for _, res in ipairs(core.resolve_node(self, child, ctx, self.next_lang or lang)) do
-			resolved[#resolved+1] = res
-		end
-	end
-	self.children = resolved
-	return { self }
+function Element:is_mergeable(key)
+	return attr_seps[key] ~= nil
 end
 
 function Element:build(builder, ctx, lang)
@@ -139,7 +79,8 @@ function Element:build(builder, ctx, lang)
 		builder:newline()
 		for i, child in ipairs(self.children) do
 			if type(child) == 'table' then
-				-- table children are guaranteed to be Elements or Rules
+				-- fragments are resolved during the resolve step, so
+				-- table children are guaranteed to be Nodes
 				child:build(builder, ctx, self.next_lang or lang)
 			else
 				builder:push(child)
