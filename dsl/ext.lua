@@ -37,7 +37,6 @@ function Component:resolve(parent, ctx, lang)
 	return core.resolve_node(parent, inner, ctx, self.lang or lang)
 end
 
-
 local Modifier = setmetatable({}, { __index = core.Node })
 Modifier.__index = Modifier
 M.Modifier = Modifier

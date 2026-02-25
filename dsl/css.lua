@@ -16,7 +16,7 @@ M.attr_seps = {
 	['src'] = ', ',
 }
 
--- {{{ rules
+-- fallback properties, processed by Rule:build
 local Fallback = {}
 Fallback.__index = Fallback
 Fallback.lang = 'css'
@@ -26,21 +26,22 @@ function Fallback.new(...)
 end
 M.Fallback = Fallback.new
 
-local Rule = {}
+-- {{{ rules
+local Rule = setmetatable({}, { __index = core.Node })
 Rule.__index = Rule
-Rule.lang = 'css'
+Rule.__call = core.Node.__call
 
 function Rule.new(selector)
 	return function(args)
-		local self = setmetatable({}, Rule)
-		core.capture_trace(self, 3)
+		local self = core.Node.new(Rule, {
+			selector = selector,
+			lang = 'css'
+		})
 
-		self.selector = selector
-		self.props = {}
-		self.children = {}
+		if type(args) ~= 'table' then args = { args } end
 
 		for k, v in util.spairs(args) do
-			self.props[k:gsub('_', '-')] = v
+			self.props[self:format_key(k)] = v
 		end
 
 		for _, v in ipairs(args) do
@@ -51,17 +52,6 @@ function Rule.new(selector)
 	end
 end
 M.Rule = Rule.new
-
-function Rule:resolve(_, ctx, _)
-	local resolved = {}
-	for _, child in ipairs(self.children) do
-		for _, res in ipairs(core.resolve_node(self, child, ctx, 'css')) do
-			resolved[#resolved+1] = res
-		end
-	end
-	self.children = resolved
-	return { self }
-end
 
 function Rule:build(builder, ctx, parent)
 	local selector = self.selector
@@ -90,13 +80,12 @@ function Rule:build(builder, ctx, parent)
 		table.sort(keys)
 
 		for i, k in ipairs(keys) do
-			local prop, _ = k:gsub('_', '-')
 			local v = self.props[k]
 
 			if getmetatable(v) == Fallback then
 				-- fallback properties (color = Fallback('black', var 'bg'))
 				for j, sub_val in ipairs(v) do
-					builder:push(prop .. ':' .. tostring(sub_val) .. ';')
+					builder:push(k .. ':' .. tostring(sub_val) .. ';')
 
 					-- don't add a newline if it's the last value of the last property
 					if not (i == #keys and j == #v) then
@@ -105,7 +94,7 @@ function Rule:build(builder, ctx, parent)
 				end
 			elseif type(v) == 'table' and not getmetatable(v) then
 				-- auto-join literal arrays
-				local sep = M.attr_seps[prop] or ' '
+				local sep = M.attr_seps[k] or ' '
 
 				-- we need to convert all values to string because keywords like
 				-- `display = flex` are actually tables with __tostring, not strings
@@ -114,12 +103,12 @@ function Rule:build(builder, ctx, parent)
 					stringified[j] = tostring(sub_val)
 				end
 
-				builder:push(prop .. ':' .. table.concat(stringified, sep) .. ';')
+				builder:push(k .. ':' .. table.concat(stringified, sep) .. ';')
 				if i < #keys then
 					builder:newline()
 				end
 			else
-				builder:push(prop .. ':' .. tostring(v) .. ';')
+				builder:push(k .. ':' .. tostring(v) .. ';')
 				if i < #keys then
 					builder:newline()
 				end
@@ -150,151 +139,41 @@ function Rule:build(builder, ctx, parent)
 
 	self.selector = original_selector
 end
-
-local Import = {}
-Import.__index = Import
-Import.lang = 'css'
-
-function Import.new(url)
-	local self = setmetatable({ url = url }, Import)
-	return core.capture_trace(self, 3)
-end
-M.Import = Import.new
-
-function Import:resolve()
-	return { self }
-end
-
-function Import:build(builder, _, _)
-	local url_str = tostring(self.url)
-
-	if not url_str:match('^url%(') and not url_str:match('^"') and not url_str:match("^'") then
-		url_str = '"' .. url_str .. '"'
-	end
-
-	builder:push('@import ' .. url_str .. ';')
-end
-
--- TODO: make pathing work properly with router
--- function M.InlineSvg(filepath)
--- 	local f = io.open(filepath, 'r')
--- 	if not f then
--- 		util.log('could not open "' .. filepath .. '"', 'warn')
--- 		return 'none'
--- 	end
---
--- 	local content = f:read('*a')
--- 	f:close()
---
--- 	content = content:gsub('[\n\r\t]+', ' ')
--- 	content = content:gsub('%%', '%%25')
--- 	content = content:gsub('#', '%%23')
--- 	content = content:gsub('<', '%%3C')
--- 	content = content:gsub('>', '%%3E')
--- 	content = content:gsub('"', '%%22')
--- 	content = content:gsub("'", '%%27')
---
--- 	return "url('data:image/svg+xml;utf8," .. content .. "')"
--- end
-
-function M.Vars(selector)
-	return function(args)
-		local new_args = {}
-		for k, v in util.spairs(args) do
-			new_args['--' .. k:gsub('_', '-')] = v
-		end
-		return Rule.new(selector)(new_args)
-	end
-end
-
-function M.Str(str)
-	str = str or ''
-	return '"' .. str .. '"'
-end
-
-function M.var(name)
-	return 'var(--' .. name:gsub('_', '-') .. ')'
-end
-
-local css_units = {
-	'px', 'cm', 'mm', 'Q', 'pc', 'pt',
-	'em', 'ex', 'ch', 'rem', 'lh', 'rlh', 'cap', 'ic',
-	'vw', 'vh', 'vmin', 'vmax', 'vi', 'vb',
-	'svw', 'svh', 'svmin', 'svmax', 'svi', 'svb',
-	'lvw', 'lvh', 'lvmin', 'lvmax', 'lvi', 'lvb',
-	'dvw', 'dvh', 'dvmin', 'dvmax', 'dvi', 'dvb',
-	'cqw', 'cqh', 'cqi', 'cqb', 'cqmin', 'cqmax',
-	'deg', 'grad', 'rad', 'turn',
-	's', 'ms',
-	'dpi', 'dpcm', 'dppx', 'x',
-	'fr'
-}
-
-for _, unit in ipairs(css_units) do
-	M[unit] = function(val)
-		return tostring(val) .. unit
-	end
-end
-
-function M.pct(val)
-	return tostring(val) .. '%'
-end
-function M.inch(val)
-	return tostring(val) .. 'in'
-end
 -- }}}
 
 -- {{{ queries
-local Query = {}
+local Query = setmetatable({}, { __index = core.Node })
 Query.__index = Query
-Query.lang = 'css'
 
 -- media { min_width = 600 } { ... }
+-- intercept bare strings, fallback to Node currying
 function Query:__call(args)
-	local clone = util.shallow_copy(self)
-	core.capture_trace(clone, 3)
-
-	clone.props = util.shallow_copy(self.props)
-	clone.children = util.shallow_copy(self.children)
-
-	-- string should be mapped to the raw prop
 	if type(args) == 'string' then
+		local clone = util.shallow_copy(self)
+		core.capture_trace(clone, 3)
+		clone.props = util.shallow_copy(self.props)
+		clone.children = util.shallow_copy(self.children)
 		clone.props.raw = args
-		return clone
-	elseif type(args) ~= 'table' then
-		args = { args }
+		return setmetatable(clone, Query)
 	end
 
-	for k, v in util.spairs(args) do
-		clone.props[k:gsub('_', '-')] = v
-	end
-
-	for _, child in ipairs(args) do
-		clone.children[#clone.children+1] = child
-	end
-
-	return clone
+	return core.Node.__call(self, args)
 end
 
 function Query.new(name)
 	return function(args)
-		local self = setmetatable({}, Query)
-		core.capture_trace(self, 3)
-
-		self.name = name
-		self.props = {}
-		self.children = {}
+		local self = core.Node.new(Query, { name = name, lang = 'css' })
 
 		-- intercept a bare string and map it to the raw prop
 		if type(args) == 'string' then
 			self.props.raw = args
-			args = {} -- clear args so the loops below safely do nothing
+			return self
 		elseif type(args) ~= 'table' then
 			args = { args }
 		end
 
 		for k, v in util.spairs(args) do
-			self.props[k:gsub('_', '-')] = v
+			self.props[self:format_key(k)] = v
 		end
 
 		for _, v in ipairs(args) do
@@ -305,17 +184,6 @@ function Query.new(name)
 	end
 end
 M.Query = Query.new
-
-function Query:resolve(_, ctx, _)
-	local resolved = {}
-	for _, child in ipairs(self.children) do
-		for _, res in ipairs(core.resolve_node(self, child, ctx, 'css')) do
-			resolved[#resolved+1] = res
-		end
-	end
-	self.children = resolved
-	return { self }
-end
 
 function Query:build(builder, ctx, _)
 	local conditions = {}
@@ -363,5 +231,87 @@ function Query:build(builder, ctx, _)
 	builder:push('}')
 end
 -- }}}
+
+-- {{{ utils
+function M.Str(str) return '"' .. (str or '') .. '"' end
+
+
+function M.var(name) return 'var(--' .. name:gsub('_', '-') .. ')' end
+function M.Vars(selector)
+	return function(args)
+		local new_args = {}
+		for k, v in util.spairs(args) do
+			new_args['--' .. k:gsub('_', '-')] = v
+		end
+		return Rule.new(selector)(new_args)
+	end
+end
+
+
+local Import = setmetatable({}, { __index = core.Node })
+Import.__index = Import
+Import.__call = core.Node.__call
+
+function Import.new(url)
+	return core.Node.new(Import, {
+		url = url,
+		lang = 'css'
+	})
+end
+M.Import = Import.new
+
+function Import:build(builder, _, _)
+	local url_str = tostring(self.url)
+
+	if not url_str:match('^url%(') and not url_str:match([=[^["']]=]) then
+		url_str = '"' .. url_str .. '"'
+	end
+
+	builder:push('@import ' .. url_str .. ';')
+end
+
+
+local css_units = {
+	'px', 'cm', 'mm', 'Q', 'pc', 'pt',
+	'em', 'ex', 'ch', 'rem', 'lh', 'rlh', 'cap', 'ic',
+	'vw', 'vh', 'vmin', 'vmax', 'vi', 'vb',
+	'svw', 'svh', 'svmin', 'svmax', 'svi', 'svb',
+	'lvw', 'lvh', 'lvmin', 'lvmax', 'lvi', 'lvb',
+	'dvw', 'dvh', 'dvmin', 'dvmax', 'dvi', 'dvb',
+	'cqw', 'cqh', 'cqi', 'cqb', 'cqmin', 'cqmax',
+	'deg', 'grad', 'rad', 'turn',
+	's', 'ms',
+	'dpi', 'dpcm', 'dppx', 'x',
+	'fr'
+}
+
+for _, unit in ipairs(css_units) do
+	M[unit] = function(val) return tostring(val) .. unit end
+end
+function M.pct(val) return tostring(val) .. '%' end
+function M.inch(val) return tostring(val) .. 'in' end
+-- }}}
+
+-- TODO: make path resolution work properly with router
+-- function M.InlineSvg(filepath)
+-- 	local f = io.open(filepath, 'r')
+-- 	if not f then
+-- 		util.log('could not open "' .. filepath .. '"', 'warn')
+-- 		return 'none'
+-- 	end
+--
+-- 	local content = f:read('*a')
+-- 	f:close()
+--
+-- 	content = content:gsub('[\n\r\t]+', ' ')
+-- 	content = content:gsub('%%', '%%25')
+-- 	content = content:gsub('#', '%%23')
+-- 	content = content:gsub('<', '%%3C')
+-- 	content = content:gsub('>', '%%3E')
+-- 	content = content:gsub('"', '%%22')
+-- 	content = content:gsub("'", '%%27')
+--
+-- 	return "url('data:image/svg+xml;utf8," .. content .. "')"
+-- end
 
 return M
