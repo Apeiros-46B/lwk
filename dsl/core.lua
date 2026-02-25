@@ -113,8 +113,8 @@ local Node = {}
 Node.__index = Node
 M.Node = Node
 
-function Node.new(subclass, initial_state)
-	local self = setmetatable(initial_state or {}, subclass)
+function Node.new(subclass, template)
+	local self = setmetatable(template or {}, subclass)
 	M.capture_trace(self, 4) -- level 4 looks past the subclass ctor
 
 	self.props = self.props or {}

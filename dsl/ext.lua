@@ -38,11 +38,11 @@ function Component:resolve(parent, ctx, lang)
 end
 
 
-local Modifier = {}
+local Modifier = setmetatable({}, { __index = core.Node })
 Modifier.__index = Modifier
 M.Modifier = Modifier
 
--- currying
+-- modifiers use varargs, not a single prop/child table, so we override the currying
 function Modifier:__call(...)
 	local clone = util.shallow_copy(self)
 	core.capture_trace(clone, 3)
@@ -50,22 +50,20 @@ function Modifier:__call(...)
 	clone.args = util.shallow_copy(self.args)
 
 	for _, v in ipairs({ ... }) do
-		clone.args[#clone.args + 1] = v
+		clone.args[#clone.args+1] = v
 	end
 
-	return clone
+	return setmetatable(clone, Modifier)
 end
 
 function Modifier.new(name, apply_fn, lang)
 	return function(...)
-		local self = setmetatable({}, Modifier)
-		core.capture_trace(self, 3)
-
-		self.name = name
-		self.lang = lang -- nil is fine
-		self.apply_fn = apply_fn
-
-		self.args = { ... }
+		local self = core.Node.new(Modifier, {
+			name = name,
+			lang = lang,
+			apply_fn = apply_fn,
+			args = { ... },
+		})
 
 		-- unwrap if it's a single table arg
 		if #self.args == 1 and type(self.args[1]) == 'table' and not getmetatable(self.args[1]) then
