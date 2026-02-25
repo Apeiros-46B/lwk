@@ -5,53 +5,34 @@ local css = require('dsl.css')
 
 local M = {}
 
-local Component = {}
+local Component = setmetatable({}, { __index = core.Node })
 Component.__index = Component
+Component.__call = core.Node.__call
 M.Component = Component
-
--- currying
-function Component:__call(args)
-	local clone = util.shallow_copy(self)
-	core.capture_trace(clone, 3)
-
-	if type(self.args) ~= 'table' then
-		clone.args = { self.args }
-	else
-		clone.args = util.shallow_copy(self.args)
-	end
-
-	if type(args) ~= 'table' then
-		args = { args }
-	end
-
-	local attr_seps = self.lang == 'css' and css.attr_seps or html.attr_seps
-	for k, v in util.spairs(args) do
-		clone.args[k] = core.merge_attr(clone.args[k], v, attr_seps[k] ~= nil)
-	end
-
-	for _, child in ipairs(args) do
-		clone.args[#clone.args+1] = child
-	end
-
-	return clone
-end
 
 function Component.new(name, render_fn, lang)
 	return function(args)
-		local self = setmetatable({}, Component)
-		core.capture_trace(self, 3)
-
-		self.tag = name
-		self.lang = lang -- nil is fine
-		self.args = args or {}
-		self.render_fn = render_fn
-
-		return self
+		return core.Node.new(Component, {
+			tag = name,
+			lang = lang,
+			render_fn = render_fn,
+			props = args or {}
+		})
 	end
 end
 
+-- components preserve exact key names for custom arguments
+function Component:format_key(k)
+	return k
+end
+
+function Component:prop_is_mergeable(key)
+	local mod = self.lang == 'css' and css or html
+	return mod.attr_seps[key] ~= nil
+end
+
 function Component:resolve(parent, ctx, lang)
-	local inner = self:render_fn(parent, self.args, ctx)
+	local inner = self:render_fn(parent, self.props, ctx)
 	-- components are inlined, and modifiers apply to their parents
 	return core.resolve_node(parent, inner, ctx, self.lang or lang)
 end

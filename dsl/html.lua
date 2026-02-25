@@ -32,7 +32,7 @@ Element.__call = core.Node.__call
 M.Element = Element
 
 -- automagically interpret uncalled "elements" as CSS keywords e.g.
--- "align_items = center," -> "align-items: center;"
+-- "display = flex" = "display = 'flex'" => "display: flex;"
 Element.__tostring = function(self) return self.tag end
 
 function Element.new(tag)

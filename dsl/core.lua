@@ -123,14 +123,16 @@ function Node.new(subclass, initial_state)
 	return self
 end
 
+function Node:format_key(k)
+	return (k:gsub('_', '-')) -- default behaviour for HTML and CSS props
+end
+
 function Node:prop_is_mergeable(key)
-	-- abstract
 	return false -- default is to overwrite properties when merging
 end
 
 function Node:build(builder, ctx, lang)
-	-- abstract
-	M.raise_error(self, 'build() not implemented on this Node')
+	M.raise_error(self, 'this node is not build()-able')
 end
 
 function Node:resolve(parent, ctx, lang)
@@ -155,7 +157,7 @@ function Node:__call(args)
 	if type(args) ~= 'table' then args = { args } end
 
 	for k, v in util.spairs(args) do
-		local key = k:gsub('_', '-')
+		local key = self:format_key(k)
 		clone.props[key] = M.merge_attr(clone.props[key], v, self:prop_is_mergeable(key))
 	end
 
