@@ -1,6 +1,7 @@
 local util = require('util')
 local core = require('dsl.core')
 local html = require('dsl.html')
+local config = require('dsl.config')
 
 local M = {}
 
@@ -303,29 +304,51 @@ end
 function M.pct(val) return tostring(val) .. '%' end
 function M.inch(val) return tostring(val) .. 'in' end
 
--- TODO: make path resolution work properly with router
--- function M.InlineSvg(filepath)
--- 	local f = io.open(filepath, 'r')
--- 	if not f then
--- 		util.log('could not open "' .. filepath .. '"', 'warn')
--- 		return 'none'
--- 	end
---
--- 	local content = f:read('*a')
--- 	f:close()
---
--- 	content = content:gsub('[\n\r\t]+', ' ')
--- 	content = content:gsub('%%', '%%25')
--- 	content = content:gsub('#', '%%23')
--- 	content = content:gsub('<', '%%3C')
--- 	content = content:gsub('>', '%%3E')
--- 	content = content:gsub('"', '%%22')
--- 	content = content:gsub("'", '%%27')
---
--- 	return "url('data:image/svg+xml;utf8," .. content .. "')"
--- end
+
+function M.InlineSvg(filepath)
+	local path
+
+	if filepath:sub(1, 1) == '/' then
+		-- absolute path (from project source root)
+		local clean_path = filepath:sub(2)
+		local root = config.in_dir:gsub('/$', '')
+		path = root .. '/' .. clean_path
+	else
+		-- path relative to the calling file
+		-- InlineSvg "icon.svg" in src/components/Header.lua
+		-- should read from src/components/icon.svg
+		local info = debug.getinfo(2, "S")
+		local caller_source = info.source
+		if caller_source:sub(1, 1) == '@' then
+			caller_source = caller_source:sub(2)
+		end
+		local caller_dir = caller_source:match("^(.*)/") or "."
+		path = caller_dir .. '/' .. filepath
+	end
+
+	local f = io.open(path, 'r')
+	if not f then
+		util.log('could not open "' .. path .. '"', 'warn', 'InlineSvg')
+		return 'none'
+	end
+
+	local content = f:read('*a')
+	f:close()
+
+	content = content:gsub('[\n\r\t]+', ' ')
+	content = content:gsub('%%', '%%25')
+	content = content:gsub('#', '%%23')
+	content = content:gsub('<', '%%3C')
+	content = content:gsub('>', '%%3E')
+	content = content:gsub('"', '%%22')
+	content = content:gsub("'", '%%27')
+
+	return "url('data:image/svg+xml;utf8," .. content .. "')"
+end
 
 
+-- stable sort to preserve within-group ordering of rules
+local global_styles_insert_counter = 0
 
 -- registers colocated CSS which is bundled into one file
 function M.GlobalStyles(priority, args)
@@ -339,7 +362,9 @@ function M.GlobalStyles(priority, args)
 	end
 
 	for _, node in ipairs(args) do
+		global_styles_insert_counter = global_styles_insert_counter + 1
 		M.global_styles[#M.global_styles+1] = {
+			id = global_styles_insert_counter,
 			priority = priority,
 			node = node,
 		}
@@ -350,7 +375,11 @@ end
 
 function M.render_global_css(builder, ctx)
 	table.sort(M.global_styles, function(a, b)
-		return a.priority < b.priority
+		if a.priority ~= b.priority then
+			return a.priority < b.priority
+		else
+			return a.id < b.id
+		end
 	end)
 
 	local nodes = {}

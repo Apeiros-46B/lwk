@@ -1,9 +1,10 @@
 local util = require('util')
 local core = require('dsl.core')
-local css = require('dsl.css')
 local html = require('dsl.html')
+local css = require('dsl.css')
 local ext = require('dsl.ext')
 local builtins = require('dsl.builtins')
+local config = require('dsl.config')
 
 local Dsl = {}
 
@@ -51,6 +52,12 @@ function Dsl.register_component(filepath)
 	util.log('registered component ' .. filepath, 'info', 'dsl')
 
 	return comp
+end
+
+function Dsl.set_config(t)
+	for k, v in pairs(t) do
+		config[k] = v
+	end
 end
 
 

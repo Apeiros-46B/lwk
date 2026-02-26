@@ -136,6 +136,11 @@ function Router.process(opts)
 	local out_dir = opts.output_dir
 	local comp_dir = opts.components_dir
 
+	Dsl.set_config({
+		in_dir = in_dir,
+		out_dir = out_dir,
+	})
+
 	os.execute(string.format([[mkdir -p '%s']], out_dir))
 
 	if comp_dir then
