@@ -123,7 +123,7 @@ function Node.new(subclass, template)
 	return self
 end
 
-function Node:format_key(k)
+function Node.format_key(k)
 	return (k:gsub('_', '-')) -- default behaviour for HTML and CSS props
 end
 
@@ -157,7 +157,7 @@ function Node:__call(args)
 	if type(args) ~= 'table' then args = { args } end
 
 	for k, v in util.spairs(args) do
-		local key = self:format_key(k)
+		local key = self.format_key(k)
 		clone.props[key] = M.merge_attr(clone.props[key], v, self:prop_is_mergeable(key))
 	end
 

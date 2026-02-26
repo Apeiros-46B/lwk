@@ -41,7 +41,7 @@ function Rule.new(selector)
 		if type(args) ~= 'table' then args = { args } end
 
 		for k, v in util.spairs(args) do
-			self.props[self:format_key(k)] = v
+			self.props[self.format_key(k)] = v
 		end
 
 		for _, v in ipairs(args) do
@@ -173,7 +173,7 @@ function Query.new(name)
 		end
 
 		for k, v in util.spairs(args) do
-			self.props[self:format_key(k)] = v
+			self.props[self.format_key(k)] = v
 		end
 
 		for _, v in ipairs(args) do
@@ -236,12 +236,13 @@ end
 function M.Str(str) return '"' .. (str or '') .. '"' end
 
 
-function M.var(name) return 'var(--' .. name:gsub('_', '-') .. ')' end
+function M.var(name) return 'var(--' .. Rule.format_key(name) .. ')' end
 function M.Vars(selector)
 	return function(args)
 		local new_args = {}
 		for k, v in util.spairs(args) do
-			new_args['--' .. k:gsub('_', '-')] = v
+			-- underscore replacement is handled by Rule
+			new_args['--' .. k] = v
 		end
 		return Rule.new(selector)(new_args)
 	end

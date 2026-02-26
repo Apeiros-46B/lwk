@@ -22,7 +22,7 @@ function Component.new(name, render_fn, lang)
 end
 
 -- components preserve exact key names for custom arguments
-function Component:format_key(k)
+function Component.format_key(k)
 	return k
 end
 

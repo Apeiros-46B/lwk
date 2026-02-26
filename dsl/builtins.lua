@@ -5,54 +5,45 @@ local html= require('dsl.html')
 
 local M = {}
 
+
 -- insert raw strings into tree
-local Raw = {}
+local Raw = setmetatable({}, { __index = core.Node })
 Raw.__index = Raw
 
 function Raw.new(text)
-	local self = setmetatable({}, Raw)
-	self.text = tostring(text)
-	return self
+	return core.Node.new(Raw, { text = tostring(text) })
 end
 M.Raw = Raw.new
-
-function Raw:resolve(_, _, _)
-	return { self }
-end
 
 function Raw:build(builder, _, _)
 	-- directly push unescaped string
 	builder:push(self.text)
 end
 
--- {{{ builtin control flow
-local If = {}
+
+-- select subtree based on condtiion: If(cond) { 'if_true' } { 'if_false' }
+local If = setmetatable({}, { __index = core.Node })
 If.__index = If
 
--- If(cond) { 'if_true' } { 'if_false' }
-function If:__call(children)
+function If:__call(args)
 	local clone = util.shallow_copy(self)
 
-	if type(children) ~= 'table' then
-		children = { children }
-	end
+	if type(args) ~= 'table' then args = { args } end
 
 	-- true branch comes first
 	if not clone.true_branch then
-		clone.true_branch = children
+		clone.true_branch = args
 	elseif not clone.false_branch then
-		clone.false_branch = children
+		clone.false_branch = args
 	else
 		core.raise_error(self, 'If already has both true and false branches')
 	end
 
-	return clone
+	return setmetatable(clone, If)
 end
 
 function If.new(cond)
-	local self = setmetatable({ cond = cond }, If)
-	core.capture_trace(self, 2)
-	return self
+	return core.Node.new(If, { cond = cond })
 end
 M.If = If.new
 
@@ -70,10 +61,11 @@ function If:resolve(parent, ctx, lang)
 	return core.resolve_node(parent, branch, ctx, lang)
 end
 
-local For = {}
+
+-- generate subtrees based on table: For(items) { fn }
+local For = setmetatable({}, { __index = core.Node })
 For.__index = For
 
--- For(items) { fn }
 function For:__call(args)
 	local clone = util.shallow_copy(self)
 
@@ -83,13 +75,11 @@ function For:__call(args)
 		core.raise_error(self, 'For can only have one block')
 	end
 
-	return clone
+	return setmetatable(clone, For)
 end
 
 function For.new(items)
-	local self = setmetatable({ items = items }, For)
-	core.capture_trace(self, 2)
-	return self
+	return core.Node.new(For, { items = items })
 end
 M.For = For.new
 
@@ -116,10 +106,12 @@ function For:resolve(parent, ctx, lang)
 	return core.resolve_node(parent, fragment, ctx, lang)
 end
 
-local Switch = {}
+
+-- select subtree based on value:
+-- Switch(value) { a = 'if_is_a', b = 'if_is_b', c = 'if_is_c' } { 'default' }
+local Switch = setmetatable({}, { __index = core.Node })
 Switch.__index = Switch
 
--- Switch(value) { a = 'if_is_a', b = 'if_is_b', c = 'if_is_c' } { 'default' }
 function Switch:__call(args)
 	local clone = util.shallow_copy(self)
 
@@ -138,28 +130,19 @@ function Switch:__call(args)
 		core.raise_error(self, 'Switch already has both cases and a default branch')
 	end
 
-	return clone
+	return setmetatable(clone, Switch)
 end
 
 function Switch.new(value)
-	local self = setmetatable({ value = value }, Switch)
-	core.capture_trace(self, 2)
-	return self
+	return core.Node.new(Switch, { value = value })
 end
 M.Switch = Switch.new
 
 function Switch:resolve(parent, ctx, lang)
 	if not self.cases then return {} end
 
-	local val = self.value
-	if type(val) == 'function' then
-		val = val(ctx)
-	end
-
-	local branch
-	if val ~= nil then
-		branch = self.cases[val]
-	end
+	local val = type(self.value) == 'function' and self.value(ctx) or self.value
+	local branch = val ~= nil and self.cases[val] or nil
 
 	if branch ~= nil then
 		return core.resolve_node(parent, branch, ctx, lang)
@@ -170,15 +153,17 @@ function Switch:resolve(parent, ctx, lang)
 	-- no match and no default block, remove ourselves from the tree
 	return {}
 end
--- }}}
 
--- {{{ builtin modifiers
+
+-- override an attribute in the parent: Set('aria-current', 'page')
 M.Set = ext.Modifier.new('Set', function(_, node, _, k, v)
 	if node.props then
-		node.props[k:gsub('_', '-')] = v
+		node.props[node.format_key(k)] = v
 	end
 end)
 
+
+-- append to an attribute in the parent: Append('class', 'highlighted')
 M.Append = ext.Modifier.new('Append', function(_, node, _, k, ...)
 	if not node.props then return end
 
@@ -196,7 +181,7 @@ M.Append = ext.Modifier.new('Append', function(_, node, _, k, ...)
 
 	if #values == 0 then return end
 
-	local key, _ = k:gsub('_', '-')
+	local key, _ = node.format_key(k)
 	local current = node.props[key]
 
 	if current == nil then
@@ -207,20 +192,22 @@ M.Append = ext.Modifier.new('Append', function(_, node, _, k, ...)
 			current[#current+1] = v
 		end
 	else
-		-- upgrade existing string to an array
+		-- promote existing string to an array
 		node.props[key] = { current }
 		for _, v in ipairs(values) do
 			node.props[key][#node.props[key]+1] = v
 		end
 	end
 end)
--- }}}
 
--- {{{ builtin components
+
+-- document wrapper
 M.Document = ext.Component.new('Document', function(_, _, args, _)
 	return { M.Raw('<!DOCTYPE html>\n'), html.Element.new('html')(args) }
 end)
 
+
+-- conditionally apply classes
 M.Classes = ext.Component.new('Classes', function(self, _, arg, ctx)
 	local map
 
@@ -252,6 +239,8 @@ M.Classes = ext.Component.new('Classes', function(self, _, arg, ctx)
 	end
 end, 'html')
 
+
+-- provide temporary context to children
 M.Provide = ext.Component.new('Provide', function(_, parent, args, ctx)
 	local provided_data = {}
 	local children = {}
@@ -276,6 +265,6 @@ M.Provide = ext.Component.new('Provide', function(_, parent, args, ctx)
 
 	return resolved
 end)
--- }}}
+
 
 return M

@@ -37,14 +37,14 @@ Element.__tostring = function(self) return self.tag end
 
 function Element.new(tag)
 	return core.Node.new(Element, {
-		tag = tag:gsub('_', '-'),
+		tag = Element.format_key(tag),
 		is_void = is_void_element[tag] or false,
 		next_lang = tag == 'style' and 'css' or nil
 	})
 end
 
 function Element:is_mergeable(key)
-	return attr_seps[key] ~= nil
+	return M.attr_seps[key] ~= nil
 end
 
 function Element:build(builder, ctx, lang)
@@ -58,7 +58,6 @@ function Element:build(builder, ctx, lang)
 	table.sort(keys)
 
 	for _, k in ipairs(keys) do
-		local prop, _ = k:gsub('_', '-')
 		local v = self.props[k]
 
 		local str
@@ -68,7 +67,7 @@ function Element:build(builder, ctx, lang)
 		else
 			str = tostring(v)
 		end
-		builder:push(' ' .. prop .. '="' .. core.escape_html(str) .. '"')
+		builder:push(' ' .. k .. '="' .. core.escape_html(str) .. '"')
 	end
 	builder:push('>')
 
