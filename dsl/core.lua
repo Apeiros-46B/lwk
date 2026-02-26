@@ -3,6 +3,7 @@ local util = require('util')
 
 local M = {}
 
+
 local html_escapes = {
 	['&'] = '&amp;',
 	['<'] = '&lt;',
@@ -42,6 +43,7 @@ function M.raise_error(node, msg)
 	)
 	error(err, 0)
 end
+
 
 -- parent is the current node that we're pushing into (target of modifiers).
 -- components pass their parent instead of themselves so nested modifiers apply properly
@@ -109,6 +111,8 @@ function M.merge_attr(existing, new_value, mergeable)
 	return merged
 end
 
+
+-- base class for all nodes
 local Node = {}
 Node.__index = Node
 M.Node = Node
@@ -167,5 +171,6 @@ function Node:__call(args)
 
 	return setmetatable(clone, getmetatable(self))
 end
+
 
 return M

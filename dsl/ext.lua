@@ -5,6 +5,8 @@ local css = require('dsl.css')
 
 local M = {}
 
+
+-- components define reusable subtrees which are inlined when instantiated
 local Component = setmetatable({}, { __index = core.Node })
 Component.__index = Component
 Component.__call = core.Node.__call
@@ -37,6 +39,10 @@ function Component:resolve(parent, ctx, lang)
 	return core.resolve_node(parent, inner, ctx, self.lang or lang)
 end
 
+
+-- modifiers are behaviours which apply to the parent node in which they reside
+-- this is useful in conjunction with builtin control flow:
+-- "If(navbar_page_is_active) { Set('aria-current', 'page') }"
 local Modifier = setmetatable({}, { __index = core.Node })
 Modifier.__index = Modifier
 M.Modifier = Modifier
@@ -83,5 +89,6 @@ function Modifier:resolve(parent, ctx, _)
 	-- modifiers are erased from AST. we cannot return nil here, return empty fragment
 	return {}
 end
+
 
 return M

@@ -1,8 +1,12 @@
 local util = require('util')
 local core = require('dsl.core')
+local html = require('dsl.html')
 
 local M = {}
 
+
+M.global_styles = {}
+M.global_css_path = '/bundle.css'
 M.attr_seps = {
 	['font-family'] = ', ',
 	['transition'] = ', ',
@@ -16,7 +20,9 @@ M.attr_seps = {
 	['src'] = ', ',
 }
 
+
 -- fallback properties, processed by Rule:build
+-- "background_color = Fallback('black', 'var(--bg)')"
 local Fallback = {}
 Fallback.__index = Fallback
 Fallback.lang = 'css'
@@ -26,7 +32,8 @@ function Fallback.new(...)
 end
 M.Fallback = Fallback.new
 
--- {{{ rules
+
+-- rules like "Rule '.btn' { color = '#0000FF' }"
 local Rule = setmetatable({}, { __index = core.Node })
 Rule.__index = Rule
 Rule.__call = core.Node.__call
@@ -139,13 +146,12 @@ function Rule:build(builder, ctx, parent)
 
 	self.selector = original_selector
 end
--- }}}
 
--- {{{ queries
+
+-- queries like "Query '@media' { min_width = 600 } { ... }"
 local Query = setmetatable({}, { __index = core.Node })
 Query.__index = Query
 
--- media { min_width = 600 } { ... }
 -- intercept bare strings, fallback to Node currying
 function Query:__call(args)
 	if type(args) == 'string' then
@@ -230,13 +236,17 @@ function Query:build(builder, ctx, _)
 	builder:newline()
 	builder:push('}')
 end
--- }}}
-
--- {{{ utils
-function M.Str(str) return '"' .. (str or '') .. '"' end
 
 
+-- insert a quoted value
+function M.Quoted(str) return '"' .. (str or '') .. '"' end
+
+
+-- reference a variable
 function M.var(name) return 'var(--' .. Rule.format_key(name) .. ')' end
+
+
+-- define variables for a selector
 function M.Vars(selector)
 	return function(args)
 		local new_args = {}
@@ -249,6 +259,7 @@ function M.Vars(selector)
 end
 
 
+-- import a URL
 local Import = setmetatable({}, { __index = core.Node })
 Import.__index = Import
 Import.__call = core.Node.__call
@@ -272,6 +283,7 @@ function Import:build(builder, _, _)
 end
 
 
+-- unit helpers e.g. "rem(1.5)"
 local css_units = {
 	'px', 'cm', 'mm', 'Q', 'pc', 'pt',
 	'em', 'ex', 'ch', 'rem', 'lh', 'rlh', 'cap', 'ic',
@@ -285,13 +297,11 @@ local css_units = {
 	'dpi', 'dpcm', 'dppx', 'x',
 	'fr'
 }
-
 for _, unit in ipairs(css_units) do
 	M[unit] = function(val) return tostring(val) .. unit end
 end
 function M.pct(val) return tostring(val) .. '%' end
 function M.inch(val) return tostring(val) .. 'in' end
--- }}}
 
 -- TODO: make path resolution work properly with router
 -- function M.InlineSvg(filepath)
@@ -314,5 +324,54 @@ function M.inch(val) return tostring(val) .. 'in' end
 --
 -- 	return "url('data:image/svg+xml;utf8," .. content .. "')"
 -- end
+
+
+
+-- registers colocated CSS which is bundled into one file
+function M.GlobalStyles(priority, args)
+	if type(priority) ~= 'number' then
+		args = priority
+		priority = 50
+	end
+
+	if type(args) ~= 'table' then
+		args = { args }
+	end
+
+	for _, node in ipairs(args) do
+		M.global_styles[#M.global_styles+1] = {
+			priority = priority,
+			node = node,
+		}
+	end
+
+	return nil
+end
+
+function M.render_global_css(builder, ctx)
+	table.sort(M.global_styles, function(a, b)
+		return a.priority < b.priority
+	end)
+
+	local nodes = {}
+	for _, entry in ipairs(M.global_styles) do
+		nodes[#nodes+1] = entry.node
+	end
+
+	local resolved = core.resolve_node(nil, nodes, ctx, 'css')
+	for _, node in ipairs(resolved) do
+		if type(node) == 'table' then
+			node:build(builder, ctx, 'css')
+		else
+			builder:push(node)
+		end
+	end
+end
+
+M.LinkGlobalStyles = html.Element.new('link') {
+	rel = 'stylesheet',
+	href = M.global_css_path,
+}
+
 
 return M

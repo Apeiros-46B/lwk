@@ -7,6 +7,21 @@ local builtins = require('dsl.builtins')
 
 local Dsl = {}
 
+
+-- try getting the member with the given key from all submodules
+local function get_member(k)
+	local existing = rawget(Dsl, k)
+	if existing then return existing end
+
+	if html[k] then return html[k] end
+	if css[k] then return css[k] end
+	if ext[k] then return ext[k] end
+	if builtins[k] then return builtins[k] end
+
+	return nil
+end
+
+
 function Dsl.render(root, builder, ctx, lang)
 	lang = lang or 'html'
 	local resolved = core.resolve_node(nil, root, ctx, lang)
@@ -26,6 +41,10 @@ function Dsl.register_component(filepath)
 		error(('invalid component name "%s"'):format(filepath), 2)
 	end
 
+	if get_member(name) ~= nil then
+		error(('component "%s" already exists'):format(name), 2)
+	end
+
 	local comp = util.eval_with_env(filepath, Dsl)
 	Dsl[name] = comp
 
@@ -34,53 +53,6 @@ function Dsl.register_component(filepath)
 	return comp
 end
 
--- {{{ global CSS extraction/bundling
-Dsl.global_styles = {}
-
--- registers colocated CSS which is bundled into one file
-function Dsl.GlobalStyles(priority, args)
-	if type(priority) ~= 'number' then
-		args = priority
-		priority = 50
-	end
-
-	if type(args) ~= 'table' then
-		args = { args }
-	end
-
-	for _, node in ipairs(args) do
-		Dsl.global_styles[#Dsl.global_styles+1] = {
-			priority = priority,
-			node = node,
-		}
-	end
-
-	return nil
-end
-
-function Dsl.render_global_css(builder, ctx)
-	table.sort(Dsl.global_styles, function(a, b)
-		return a.priority < b.priority
-	end)
-
-	local nodes = {}
-	for _, entry in ipairs(Dsl.global_styles) do
-		nodes[#nodes+1] = entry.node
-	end
-
-	local resolved = core.resolve_node(nil, nodes, ctx, 'css')
-	for _, node in ipairs(resolved) do
-		if type(node) == 'table' then
-			node:build(builder, ctx, 'css')
-		else
-			builder:push(node)
-		end
-	end
-end
-
-Dsl.global_css_path = '/bundle.css'
-Dsl.LinkGlobalStyles = html.Element.new('link') { rel = 'stylesheet', href = Dsl.global_css_path }
--- }}}
 
 -- env setup to pass through globals, lazily create HTML elements,
 -- and handle write-only component registration
@@ -88,13 +60,13 @@ setmetatable(Dsl, {
 	__index = function(env, k)
 		-- HTML "table" element has a conflict with Lua's table library
 		if k ~= 'table' and _G[k] then return _G[k] end
-
 		if type(k) ~= 'string' then return nil end
 
-		if html[k] then return html[k] end
-		if css[k] then return css[k] end
-		if ext[k] then return ext[k] end
-		if builtins[k] then return builtins[k] end
+		local member = get_member(k)
+		if member ~= nil then
+			rawset(env, k, member)
+			return member
+		end
 
 		if k:find('^%u') then
 			-- components always begin with uppercase
@@ -106,20 +78,20 @@ setmetatable(Dsl, {
 		rawset(env, k, element)
 		return element
 	end,
-	-- TODO: make it so new components cannot shadow builtins
 	__newindex = function(env, k, v)
 		if type(k) ~= 'string' then
 			error(('cannot use non-string key "%s"'):format(tostring(k)), 2)
 		end
-		if rawget(env, k) ~= nil then
-			error(('component "%s" already exists'):format(k), 2)
-		end
 		if k:find('^%l') then
 			error(('component name "%s" cannot start with lowercase'):format(k), 2)
+		end
+		if get_member(k) ~= nil then
+			error(('component "%s" already exists'):format(k), 2)
 		end
 
 		rawset(env, k, v)
 	end
 })
+
 
 return Dsl

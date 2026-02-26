@@ -1,7 +1,7 @@
-local util = require('util')
 local core = require('dsl.core')
 
 local M = {}
+
 
 M.attr_seps = {
 	srcset = ', ',
@@ -26,6 +26,9 @@ local is_void_element = {
 	wbr = true,
 }
 
+
+-- elements are nodes which are transformed into HTML tags
+-- "p { id = 'my-paragraph', 'Hello world!' }"
 local Element = setmetatable({}, { __index = core.Node })
 Element.__index = Element
 Element.__call = core.Node.__call
@@ -94,5 +97,6 @@ function Element:build(builder, ctx, lang)
 
 	builder:push('</' .. self.tag .. '>')
 end
+
 
 return M
