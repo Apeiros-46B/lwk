@@ -1,4 +1,3 @@
--- TODO: per-folder context.lua files which allow adding to the context for only the files in that folder and its subfolders (recursive inheritance)
 local util = require('util')
 local Builder = require('builder')
 local Dsl = require('dsl')

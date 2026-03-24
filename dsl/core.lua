@@ -51,7 +51,7 @@ function M.resolve_node(parent, node, ctx, lang)
 	local ty = type(node)
 	if not node then return {} end
 
-	if ty == 'string' or ty == 'number' then
+	if ty == 'string' or ty == 'number' or ty == 'boolean' then
 		local str = tostring(node)
 		if lang == 'html' then
 			return { M.escape_html(str) }
@@ -146,8 +146,12 @@ function Node:resolve(parent, ctx, lang)
 			resolved[#resolved+1] = res
 		end
 	end
-	self.children = resolved
-	return { self }
+
+	local clone = util.shallow_copy(self)
+	clone.props = util.shallow_copy(self.props)
+	clone.children = resolved
+
+	return { clone }
 end
 
 -- for currying. this metamethod must be copied by subclasses to function
@@ -158,7 +162,7 @@ function Node:__call(args)
 	clone.props = util.shallow_copy(self.props)
 	clone.children = util.shallow_copy(self.children)
 
-	if type(args) ~= 'table' then args = { args } end
+	if type(args) ~= 'table' or getmetatable(args) then args = { args } end
 
 	for k, v in util.spairs(args) do
 		local key = self.format_key(k)

@@ -88,7 +88,6 @@ function For:resolve(parent, ctx, lang)
 	if type(self.items) == 'function' then
 		iter, state, var = self.items(ctx)
 	elseif type(self.items) == 'table' and not getmetatable(self.items) then
-		-- TODO: support dictionaries as well. unordered keys is an issue
 		iter, state, var = ipairs(self.items)
 	else
 		return {}
