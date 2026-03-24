@@ -44,6 +44,15 @@ function util.freeze(tbl)
 		__index = tbl,
 		__newindex = function (_, _, _)
 			error('attempt to modify read-only table')
+		end,
+		__pairs = function()
+			return pairs(tbl)
+		end,
+		__ipairs = function()
+			return ipairs(tbl)
+		end,
+		__len = function()
+			return #tbl
 		end
 	})
 end
@@ -58,15 +67,17 @@ function util.shallow_copy(tbl)
 	return setmetatable(res, mt)
 end
 
+local function spairs_iter(tbl, k)
+	local v
+	repeat
+		k, v = next(tbl, k)
+	until type(k) == 'string' or k == nil
+	return k, v
+end
+
 -- iterate over only pairs with string keys
 function util.spairs(tbl)
-	return coroutine.wrap(function()
-		for k, v in pairs(tbl) do
-			if type(k) == 'string' then
-				coroutine.yield(k, v)
-			end
-		end
-	end)
+	return spairs_iter, tbl, nil
 end
 
 return util
