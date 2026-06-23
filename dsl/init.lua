@@ -49,7 +49,7 @@ function Dsl.register_component(filepath)
 	local comp = util.eval_with_env(filepath, Dsl)
 	Dsl[name] = comp
 
-	util.log('registered component ' .. filepath, 'info', 'dsl')
+	util.log('registered component ' .. name, 'info', 'dsl')
 
 	return comp
 end
@@ -76,8 +76,24 @@ setmetatable(Dsl, {
 		end
 
 		if k:find('^%u') then
-			-- components always begin with uppercase
-			error(('unknown component "%s"'):format(k), 2)
+			-- component might not be loaded yet, return a lazy wrapper to defer component
+			-- resolution to render-time (make not components error when they reference other
+			-- components before they have been registered)
+
+			-- not cached so that register_component can install the real one
+			return function(props)
+				return setmetatable({ _lazy_name = k, _lazy_props = props }, {
+					__index = {
+						resolve = function(self, parent, ctx, lang)
+							local real = get_member(k) or rawget(Dsl, k)
+							if not real then
+								error(('unknown component "%s"'):format(k), 2)
+							end
+							return core.resolve_node(parent, real(self._lazy_props), ctx, lang)
+						end,
+					}
+				})
+			end
 		end
 
 		-- lazily generate HTML elements

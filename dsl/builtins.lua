@@ -252,8 +252,7 @@ M.Provide = ext.Component.new('Provide', function(_, parent, args, ctx)
 		end
 	end
 
-	local inner_ctx = setmetatable(provided_data, { __index = ctx })
-
+	local inner_ctx = util.deep_merge(ctx, { state = provided_data })
 	local resolved = {}
 	for _, child in ipairs(children) do
 		local lang = type(child) == 'table' and child.lang or nil
