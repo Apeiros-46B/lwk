@@ -77,7 +77,7 @@ setmetatable(Dsl, {
 
 		if k:find('^%u') then
 			-- component might not be loaded yet, return a lazy wrapper to defer component
-			-- resolution to render-time (make not components error when they reference other
+			-- resolution to render-time (make components not error when they reference other
 			-- components before they have been registered)
 
 			-- not cached so that register_component can install the real one
