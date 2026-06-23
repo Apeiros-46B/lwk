@@ -80,4 +80,33 @@ function util.spairs(tbl)
 	return spairs_iter, tbl, nil
 end
 
+-- deeply merge two tables, returning a new table. does not mutate originals
+---> for string keys, if both values are plain tables (no metatable), recursively merge
+---> for integer keys, child values are appended after parent values
+function util.deep_merge(parent, child)
+	-- not a plain table (or nil), child overrides
+	if type(parent) ~= 'table' or getmetatable(parent)
+		or type(child) ~= 'table' or getmetatable(child) then
+		return child
+	end
+
+	local result = {}
+
+	for k, v in pairs(parent) do
+		result[k] = v
+	end
+
+	for k, v in pairs(child) do
+		if type(k) == 'number' and math.floor(k) == k then
+			result[#result + 1] = v
+		elseif type(result[k]) == 'table' and type(v) == 'table'
+			and not getmetatable(result[k]) and not getmetatable(v) then
+			result[k] = util.deep_merge(result[k], v)
+		else
+			result[k] = v
+		end
+	end
+	return result
+end
+
 return util
