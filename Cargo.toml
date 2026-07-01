@@ -5,12 +5,14 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.103"
+argh = "0.1.19"
 blake3 = "1.8.5"
 bumpalo = "3.19.0"
 env_logger = "0.11.11"
 log = "0.4.33"
 minify-html-onepass = "0.18.1"
 mlua = { version = "0.11.6", features = ["anyhow", "luajit", "macros", "vendored"] }
-serde = "1.0.228"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
 toml = "1.1.2"
 walkdir = "2.5.0"

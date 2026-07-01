@@ -1,0 +1,13 @@
+[build]
+out_dir = "dist"
+pages_dir = "test/pages"
+# modules_dir = "test/modules"
+# components_dir = "test/components"
+# transforms_dir = "test/transforms"
+# config_file = "test/config.lua"
+
+[handlers.files.lua]
+json = "test/handlers/lua_json.lua"
+
+[handlers.global]
+css = "test/handlers/global_css.lua"
