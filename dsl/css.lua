@@ -304,6 +304,8 @@ end
 function M.pct(val) return tostring(val) .. '%' end
 function M.inch(val) return tostring(val) .. 'in' end
 
+function M.url(val) return 'url(' .. tostring(val) .. ')' end
+
 
 function M.InlineSvg(filepath)
 	local path
