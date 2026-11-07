@@ -14,7 +14,7 @@ An HTML/CSS templating engine/static site generator scriptable in Lua.
   - Write arbitrary Lua functions to group and sort pages based on their existing
     metadata, or rewrite or emit entirely new metadata
   - Component and page renders can depend on that metadata
-  - Make custom handlers for new input source formats in Lua
+  <!-- - Make custom handlers for new input source formats in Lua -->
 
 <details>
   <summary>(Click to expand) Minimal example</summary>
