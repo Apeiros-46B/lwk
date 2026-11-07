@@ -17,35 +17,35 @@ An HTML/CSS templating engine/static site generator scriptable in Lua.
   - Make custom handlers for new input source formats in Lua
 
 <details>
-    <summary>(Click to expand) Minimal example</summary>
+  <summary>(Click to expand) Minimal example</summary>
 
-    This snippet:
+  This snippet:
 
-    ```lua
-    return Document {
-        lang = 'en',
-        head {
-            meta { charset = 'UTF-8' },
-            title 'Hello world!',
-        },
-        body(p 'Hello from Lua!'),
-    }
-    ```
+  ```lua
+  return Document {
+      lang = 'en',
+      head {
+          meta { charset = 'UTF-8' },
+          title 'Hello world!',
+      },
+      body(p 'Hello from Lua!'),
+  }
+  ```
 
-    renders as (prettified):
+  renders as (prettified):
 
-    ```html
-    <!DOCTYPE html>
-    <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <title>Hello world!</title>
-        </head>
-        <body>
-            <p>Hello from Lua!</p>
-        </body>
-    </html>
-    ```
+  ```html
+  <!DOCTYPE html>
+  <html lang="en">
+      <head>
+          <meta charset="UTF-8">
+          <title>Hello world!</title>
+      </head>
+      <body>
+          <p>Hello from Lua!</p>
+      </body>
+  </html>
+  ```
 </details>
 
 # Quickstart
@@ -85,18 +85,18 @@ Add a page under your `in_dir` (in this case `src/site`), and name the file
 `index.html.lua`. You can copy the example here:
 
 <details>
-    <summary>(Click to expand) Example page</summary>
+  <summary>(Click to expand) Example page</summary>
 
-    ```lua
-    return Document {
-        lang = 'en',
-        head {
-            meta { charset = 'UTF-8' },
-            title 'Hello world!',
-        },
-        body(p 'Hello from Lua!'),
-    }
-    ```
+  ```lua
+  return Document {
+      lang = 'en',
+      head {
+          meta { charset = 'UTF-8' },
+          title 'Hello world!',
+      },
+      body(p 'Hello from Lua!'),
+  }
+  ```
 </details>
 
 How the code in this page is rendered will be explained in the next section.
