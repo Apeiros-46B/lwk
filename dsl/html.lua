@@ -46,7 +46,7 @@ function Element.new(tag)
 	})
 end
 
-function Element:is_mergeable(key)
+function Element:prop_is_mergeable(key)
 	return M.attr_seps[key] ~= nil
 end
 
