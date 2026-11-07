@@ -234,7 +234,7 @@ This lets you build lists using arbitrary Lua code.
 ## Renderables: Render callbacks
 
 A render callback is just a function that takes a single argument `ctx`
-(the context, explained in the [metadata section](#metadata)) and returns any
+([the render context](#context)) and returns any
 renderable value, including literals, HTML elements, components, or
 other render callbacks.
 
