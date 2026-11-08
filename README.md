@@ -82,24 +82,20 @@ router.process {
 ```
 
 Add a page under your `in_dir` (in this case `src/site`), and name the file
-`index.html.lua`. You can copy the example here:
+`index.html.lua`, with these contents:
 
-<details>
-  <summary>(Click to expand) Example page</summary>
+```lua
+return Document {
+    lang = 'en',
+    head {
+        meta { charset = 'UTF-8' },
+        title 'Hello world!',
+    },
+    body(p 'Hello from Lua!'),
+}
+```
 
-  ```lua
-  return Document {
-      lang = 'en',
-      head {
-          meta { charset = 'UTF-8' },
-          title 'Hello world!',
-      },
-      body(p 'Hello from Lua!'),
-  }
-  ```
-</details>
-
-How the code in this page is rendered will be explained in the next section.
+How the code in this snippet is rendered will be explained in the next section.
 
 To build, simply run your `init.lua` with your Lua interpreter of choice. This
 will produce `dist/index.html`.
